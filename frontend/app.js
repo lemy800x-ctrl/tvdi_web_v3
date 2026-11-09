@@ -213,54 +213,41 @@ function renderNotice() {
   n.hidden = !msg; if (msg) n.textContent = msg;
 }
 
+
 /* =====================================================================
    BẢN ĐỒ (MapLibre: 2D và 3D dùng chung)
+   Sử dụng OpenFreeMap - Positron, không cần API Key
    ===================================================================== */
 
 function initMap() {
+  // Kiểm tra thư viện MapLibre
   if (!window.maplibregl) {
     state.error = "Không tải được thư viện bản đồ. Kiểm tra kết nối mạng.";
     renderNotice();
     return;
   }
 
+  // Tránh khởi tạo bản đồ nhiều lần
+  if (state.map) {
+    state.map.remove();
+    state.map = null;
+  }
+
+  // Khởi tạo bản đồ
   const map = new maplibregl.Map({
     container: "map",
     center: [106.75, 10.85],
     zoom: 8.6,
+    minZoom: 6,
+    maxZoom: 19,
     maxPitch: 70,
-    attributionControl: { compact: true },
-
-    style: {
-      version: 8,
-
-      sources: {
-        carto: {
-          type: "raster",
-          tiles: [
-            "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
-          ],
-          tileSize: 256,
-          maxzoom: 20,
-          attribution:
-            "© OpenStreetMap contributors © CARTO"
-        }
-      },
-
-      layers: [
-        {
-          id: "carto-background",
-          type: "raster",
-          source: "carto",
-          paint: {
-            "raster-saturation": -0.5,
-            "raster-opacity": 1
-          }
-        }
-      ]
-    }
+    attributionControl: {
+      compact: true
+    },
+    style: "https://tiles.openfreemap.org/styles/positron"
   });
 
+  // Điều khiển phóng to, thu nhỏ và xoay bản đồ
   map.addControl(
     new maplibregl.NavigationControl({
       visualizePitch: true
@@ -268,15 +255,26 @@ function initMap() {
     "top-right"
   );
 
+  // Khi bản đồ tải hoàn tất
   map.on("load", () => {
+    console.log("Bản đồ OpenFreeMap đã tải thành công.");
+
     state.mapReady = true;
+    state.error = null;
+
+    // Khởi tạo các lớp dữ liệu GeoJSON
     ensureLayers();
   });
 
+  // Bắt lỗi tải bản đồ
   map.on("error", (e) => {
-    console.error("Lỗi bản đồ:", e.error || e);
+    console.error(
+      "Lỗi bản đồ:",
+      e.error || e
+    );
   });
 
+  // Lưu bản đồ vào state
   state.map = map;
 }
 
