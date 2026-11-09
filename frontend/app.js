@@ -216,19 +216,68 @@ function renderNotice() {
 /* =====================================================================
    BẢN ĐỒ (MapLibre: 2D và 3D dùng chung)
    ===================================================================== */
+
 function initMap() {
-  if (!window.maplibregl) { state.error = "Không tải được thư viện bản đồ. Kiểm tra kết nối mạng."; renderNotice(); return; }
+  if (!window.maplibregl) {
+    state.error = "Không tải được thư viện bản đồ. Kiểm tra kết nối mạng.";
+    renderNotice();
+    return;
+  }
+
   const map = new maplibregl.Map({
-    container: "map", center: [106.75, 10.85], zoom: 8.6, maxPitch: 70, attributionControl: { compact: true },
-    style: { version: 8,
-      sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 19,
-        attribution: "© OpenStreetMap contributors" } },
-      layers: [{ id: "osm", type: "raster", source: "osm", paint: { "raster-saturation": -0.8, "raster-opacity": 0.8 } }] },
+    container: "map",
+    center: [106.75, 10.85],
+    zoom: 8.6,
+    maxPitch: 70,
+    attributionControl: { compact: true },
+
+    style: {
+      version: 8,
+
+      sources: {
+        carto: {
+          type: "raster",
+          tiles: [
+            "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+          ],
+          tileSize: 256,
+          maxzoom: 20,
+          attribution:
+            "© OpenStreetMap contributors © CARTO"
+        }
+      },
+
+      layers: [
+        {
+          id: "carto-background",
+          type: "raster",
+          source: "carto",
+          paint: {
+            "raster-saturation": -0.5,
+            "raster-opacity": 1
+          }
+        }
+      ]
+    }
   });
-  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
-  map.on("load", () => { state.mapReady = true; ensureLayers(); });
+
+  map.addControl(
+    new maplibregl.NavigationControl({
+      visualizePitch: true
+    }),
+    "top-right"
+  );
+
+  map.on("load", () => {
+    state.mapReady = true;
+    ensureLayers();
+  });
+
+  map.on("error", (e) => {
+    console.error("Lỗi bản đồ:", e.error || e);
+  });
+
   state.map = map;
-  state.popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, maxWidth: "260px" });
 }
 
 function ensureLayers() {
