@@ -214,40 +214,79 @@ function renderNotice() {
 }
 
 
+
 /* =====================================================================
-   BẢN ĐỒ (MapLibre: 2D và 3D dùng chung)
-   Sử dụng OpenFreeMap - Positron, không cần API Key
+   BẢN ĐỒ TVDI TP.HCM
+   MapLibre GL JS - 2D và 3D dùng chung
+   Nền: Esri World Light Gray Canvas
    ===================================================================== */
 
 function initMap() {
-  // Kiểm tra thư viện MapLibre
+  // 1. Kiểm tra MapLibre
   if (!window.maplibregl) {
-    state.error = "Không tải được thư viện bản đồ. Kiểm tra kết nối mạng.";
+    state.error = "Không tải được thư viện MapLibre GL JS.";
     renderNotice();
     return;
   }
 
-  // Tránh khởi tạo bản đồ nhiều lần
+  // 2. Xóa bản đồ cũ nếu đã tồn tại
   if (state.map) {
     state.map.remove();
     state.map = null;
   }
 
-  // Khởi tạo bản đồ
+  // 3. Khởi tạo bản đồ nền Esri Light Gray
   const map = new maplibregl.Map({
     container: "map",
+
     center: [106.75, 10.85],
     zoom: 8.6,
+
     minZoom: 6,
     maxZoom: 19,
     maxPitch: 70,
+
     attributionControl: {
       compact: true
     },
-    style: "https://tiles.openfreemap.org/styles/positron"
+
+    style: {
+      version: 8,
+
+      sources: {
+        esri: {
+          type: "raster",
+
+          tiles: [
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+          ],
+
+          tileSize: 256,
+          minzoom: 0,
+          maxzoom: 16,
+
+          attribution:
+            "Tiles © Esri — Sources: Esri, HERE, Garmin, USGS, NOAA"
+        }
+      },
+
+      layers: [
+        {
+          id: "esri-light-gray-background",
+          type: "raster",
+          source: "esri",
+
+          paint: {
+            "raster-opacity": 1,
+            "raster-saturation": -0.35,
+            "raster-contrast": 0.05
+          }
+        }
+      ]
+    }
   });
 
-  // Điều khiển phóng to, thu nhỏ và xoay bản đồ
+  // 4. Điều khiển bản đồ
   map.addControl(
     new maplibregl.NavigationControl({
       visualizePitch: true
@@ -255,28 +294,35 @@ function initMap() {
     "top-right"
   );
 
-  // Khi bản đồ tải hoàn tất
+  // 5. Lưu bản đồ vào state
+  state.map = map;
+  state.mapReady = false;
+
+  // 6. Khi bản đồ tải thành công
   map.on("load", () => {
-    console.log("Bản đồ OpenFreeMap đã tải thành công.");
+    console.log("Esri Light Gray đã tải thành công.");
 
     state.mapReady = true;
     state.error = null;
 
-    // Khởi tạo các lớp dữ liệu GeoJSON
+    // Nạp các lớp GeoJSON 167 phường/xã
     ensureLayers();
   });
 
-  // Bắt lỗi tải bản đồ
+  // 7. Bắt lỗi tải bản đồ
   map.on("error", (e) => {
     console.error(
-      "Lỗi bản đồ:",
+      "MapLibre error:",
       e.error || e
     );
   });
 
-  // Lưu bản đồ vào state
-  state.map = map;
+  // 8. Khi bản đồ thay đổi kích thước
+  setTimeout(() => {
+    map.resize();
+  }, 300);
 }
+
 
 function ensureLayers() {
   const map = state.map;
