@@ -1,0 +1,9 @@
+# Chỉ cần ở máy chạy xử lý dữ liệu và huấn luyện (KHÔNG cần trên Render)
+numpy
+pandas
+scikit-learn
+psycopg2-binary
+python-dotenv
+# Tùy chọn (không có thì script tự bỏ qua XGBoost, LSTM, GRU):
+# xgboost
+# tensorflow

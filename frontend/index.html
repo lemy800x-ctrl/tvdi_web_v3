@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TVDI TP.HCM - Theo dõi khô hạn</title>
+  <meta name="description" content="Bản đồ theo dõi và dự báo khô hạn (TVDI), nhiệt độ bề mặt (LST), chỉ số thực vật (NDVI) theo phường/xã TP.HCM">
+  <meta property="og:title" content="TVDI TP.HCM - Theo dõi khô hạn">
+  <meta property="og:description" content="Hiện trạng và dự báo khô hạn theo phường/xã TP.HCM">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== Thanh trên cùng ===== -->
+  <header class="topbar">
+    <h1>Khô hạn TP.HCM</h1>
+    <div class="seg" id="seg-metric" role="group" aria-label="Chỉ số hiển thị">
+      <button data-metric="tvdi" class="on" title="Chỉ số khô hạn TVDI">TVDI</button>
+      <button data-metric="lst" title="Nhiệt độ bề mặt">LST</button>
+      <button data-metric="ndvi" title="Chỉ số thực vật">NDVI</button>
+    </div>
+    <div class="seg" id="seg-view" role="group" aria-label="Kiểu bản đồ">
+      <button data-view="2d" class="on">2D</button>
+      <button data-view="3d">3D</button>
+    </div>
+    <span class="spacer"></span>
+    <button id="btn-theme" class="primary" type="button" title="Lập bản đồ chuyên đề cho tháng đang xem">Lập bản đồ chuyên đề</button>
+    <button id="btn-admin" class="ghost" type="button">Quản trị</button>
+    <button id="btn-rail" class="ghost only-mobile" type="button" aria-expanded="false">Thông tin</button>
+  </header>
+
+  <!-- ===== Bản đồ (thành phần chủ đạo) ===== -->
+  <section class="stage" aria-label="Bản đồ">
+    <div id="map" role="application" aria-label="Bản đồ theo phường/xã"></div>
+
+    <div id="banner" class="banner" aria-live="polite">
+      <span id="banner-mode" class="banner-mode">-</span>
+      <span id="banner-period" class="banner-period">-</span>
+    </div>
+    <div id="notice" class="notice" hidden></div>
+
+    <div class="legend" aria-label="Chú giải">
+      <div class="legend-title" id="legend-title">TVDI</div>
+      <div class="legend-bar" id="legend-bar"></div>
+      <div class="legend-ticks" id="legend-ticks"></div>
+      <div class="legend-nodata"><i></i>Không có dữ liệu</div>
+    </div>
+
+    <button id="chat-launcher" class="chat-launcher" type="button" aria-label="Mở trợ lý hỏi đáp">
+      <span aria-hidden="true">&#x1F525;</span><b>AI TVDI</b>
+    </button>
+    <section id="chat-panel" class="chat-panel" hidden aria-label="Trợ lý hỏi đáp">
+      <header><b>Trợ lý AI TVDI</b><button id="chat-close" type="button" aria-label="Đóng">×</button></header>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <div id="chat-chips" class="chat-chips"></div>
+      <form id="chat-form" autocomplete="off">
+        <input id="chat-input" type="text" placeholder="Ví dụ: phường nào khô nhất?" aria-label="Câu hỏi">
+        <button type="submit">Gửi</button>
+      </form>
+    </section>
+
+    <!-- Thanh thời gian + hoạt ảnh -->
+    <div class="timeline">
+      <div class="tl-head">
+        <span id="strip-caption" class="tl-caption">Chọn tháng để xem trên bản đồ</span>
+        <div class="anim">
+          <label>Từ <select id="anim-from"></select></label>
+          <label>đến <select id="anim-to"></select></label>
+          <select id="anim-speed" aria-label="Tốc độ">
+            <option value="0.5">Chậm</option><option value="1" selected>Vừa</option><option value="2">Nhanh</option>
+          </select>
+          <label class="chk"><input type="checkbox" id="anim-loop"> Lặp</label>
+          <button id="anim-play" class="primary" type="button">▶ Phát</button>
+          <button id="btn-forecast6" class="ghost" type="button" title="Chạy từ tháng hiện trạng mới nhất qua các tháng dự báo">Xem dự báo 6 tháng tới</button>
+        </div>
+      </div>
+      <div id="strip" class="strip" tabindex="0" role="slider" aria-label="Thanh thời gian theo tháng"
+           aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></div>
+    </div>
+  </section>
+
+  <!-- ===== Cột thông tin ===== -->
+  <aside class="rail" id="rail">
+    <div class="tabs" role="tablist" aria-label="Nội dung">
+      <button role="tab" data-tab="overview" aria-selected="true">Tổng quan</button>
+      <button role="tab" data-tab="rank" aria-selected="false">Xếp hạng &amp; lọc</button>
+      <button role="tab" data-tab="model" aria-selected="false">Mô hình</button>
+      <button role="tab" data-tab="admin" aria-selected="false" id="tab-admin" hidden>Quản trị</button>
+    </div>
+
+    <!-- Tổng quan -->
+    <div class="panel" data-panel="overview">
+      <section class="block">
+        <div class="mean-line">
+          <span id="mean-value" class="mean-value">-</span>
+          <span id="mean-label" class="muted">-</span>
+        </div>
+        <div id="class-bar" class="class-bar" aria-hidden="true"></div>
+        <ul id="class-list" class="class-list"></ul>
+        <p id="est-note" class="est-note" hidden></p>
+      </section>
+      <section class="block" id="fc-block" hidden>
+        <h3>Dự báo toàn thành phố các tháng tới</h3>
+        <p class="muted small">Bấm một dòng để xem tháng đó trên bản đồ.</p>
+        <table id="fc-table" class="mini"><thead><tr><th>Tháng</th><th>TVDI trung bình</th><th>Phường/xã khô trở lên</th></tr></thead><tbody></tbody></table>
+      </section>
+      <section class="block" id="ward-block" hidden>
+        <h2 id="ward-name">-</h2>
+        <div id="ward-values" class="ward-values"></div>
+        <div class="chart-box"><canvas id="ward-chart" aria-label="Biểu đồ theo tháng của phường/xã"></canvas></div>
+        <p class="muted small" id="ward-chart-note"></p>
+        <h3>Dự báo các tháng tới</h3>
+        <table id="ward-forecast" class="mini"><tbody></tbody></table>
+      </section>
+      <section class="block" id="hint-block">
+        <p class="muted">Bấm vào một phường/xã trên bản đồ để xem chi tiết, hoặc bấm một tháng trên thanh thời gian để xem hiện trạng và dự báo.</p>
+      </section>
+    </div>
+
+    <!-- Xếp hạng & lọc -->
+    <div class="panel" data-panel="rank" hidden>
+      <section class="block">
+        <div class="seg seg-wide" id="rank-metric" role="group" aria-label="Xếp hạng theo">
+          <button data-m="lst">LST cao → thấp</button>
+          <button data-m="ndvi">NDVI thấp → cao</button>
+          <button data-m="tvdi" class="on">TVDI cao → thấp</button>
+        </div>
+        <button id="rank-reverse" class="ghost small" type="button">Đảo thứ tự</button>
+        <h3>Lọc theo ngưỡng</h3>
+        <div class="filter-row">
+          <select id="f-op" aria-label="Phép so sánh">
+            <option value="gt">&gt;</option><option value="ge">≥</option>
+            <option value="lt">&lt;</option><option value="le">≤</option>
+            <option value="between">từ … đến</option>
+          </select>
+          <input id="f-a" type="number" step="any" placeholder="Giá trị" aria-label="Giá trị">
+          <input id="f-b" type="number" step="any" placeholder="đến" aria-label="Giá trị trên" hidden>
+          <button id="f-apply" class="primary" type="button">Lọc</button>
+          <button id="f-clear" class="ghost" type="button">Bỏ lọc</button>
+        </div>
+        <p class="muted small" id="f-hint">Ví dụ: chọn LST, phép &gt;, giá trị 40 để hiện các phường có nhiệt độ bề mặt trên 40 °C.</p>
+        <input id="rank-search" type="search" placeholder="Tìm phường/xã..." aria-label="Tìm phường/xã">
+      </section>
+      <section class="block tight">
+        <div id="rank-count" class="muted small"></div>
+        <ol id="rank-list" class="rank-list"></ol>
+      </section>
+    </div>
+
+    <!-- Mô hình -->
+    <div class="panel" data-panel="model" hidden>
+      <section class="block">
+        <h2>Dự báo bằng mô hình gì?</h2>
+        <p id="model-used" class="muted">-</p>
+      </section>
+      <section class="block">
+        <h2>So sánh các mô hình</h2>
+        <p class="muted small">Chỉ số trên giai đoạn kiểm tra (dữ liệu thật mà mô hình chưa từng thấy). MAE, RMSE càng thấp càng tốt. Cột "So với khí hậu" dương nghĩa là tốt hơn việc chỉ dùng TVDI trung bình nhiều năm theo tháng.</p>
+        <div class="table-wrap"><table id="model-table"><thead><tr><th>Mô hình</th><th>MAE</th><th>RMSE</th><th>R²</th><th>So với khí hậu</th></tr></thead><tbody></tbody></table></div>
+      </section>
+      <section class="block">
+        <h2>Kiểm chứng bằng dữ liệu thật</h2>
+        <p class="muted small">Mô hình chỉ biết dữ liệu đến hết 2025, dự báo từng tháng của 2026, rồi so với TVDI thật của tháng đó.</p>
+        <div class="chart-box"><canvas id="verify-chart" aria-label="Sai số theo số tháng dự báo trước"></canvas></div>
+        <div class="table-wrap"><table id="verify-table"><thead><tr><th>Dự báo trước</th><th>Số phường/xã</th><th>RMSE mô hình</th><th>RMSE khí hậu</th></tr></thead><tbody></tbody></table></div>
+      </section>
+      <section class="block">
+        <h2>Độ phù hợp cạnh khô/cạnh ướt</h2>
+        <p class="muted small">R² trung bình của đường hồi quy NDVI - LST theo tháng trong năm. Tháng có R² thấp thì TVDI kém tin cậy hơn.</p>
+        <div class="chart-box"><canvas id="edge-chart" aria-label="R² cạnh khô và cạnh ướt theo tháng"></canvas></div>
+      </section>
+    </div>
+
+    <!-- Quản trị (chỉ hiện sau khi đăng nhập) -->
+    <div class="panel" data-panel="admin" hidden>
+      <section class="block">
+        <div class="row-between"><h2>Quản trị</h2><button id="admin-logout" class="ghost small" type="button">Đăng xuất</button></div>
+        <p class="muted small">Chỉ quản trị viên thấy phần này. Web không gọi trực tiếp Google Earth Engine: dữ liệu được xuất từ Earth Engine, xử lý ở máy rồi nạp tại đây.</p>
+      </section>
+      <section class="block">
+        <div class="row-between"><h3>Tình trạng dữ liệu</h3><button id="admin-refresh" class="ghost small" type="button">Làm mới</button></div>
+        <div id="admin-status" class="admin-status">-</div>
+      </section>
+      <section class="block">
+        <h3>Nạp dữ liệu (CSV)</h3>
+        <div id="admin-uploads"></div>
+      </section>
+      <section class="block">
+        <h3>Ảnh/tháng không dùng được</h3>
+        <p class="muted small">Các tháng có phường/xã thiếu ảnh vệ tinh dùng được (ít ảnh, nhiều mây, không hồi quy được cạnh khô/ướt). Trên bản đồ các ô này là số ước lượng và được ghi rõ; học máy không dùng chúng.</p>
+        <div class="table-wrap"><table id="admin-quality"><thead><tr><th>Tháng</th><th>Số ảnh</th><th>Ước lượng (thiếu ảnh)</th></tr></thead><tbody></tbody></table></div>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<!-- Hộp thoại đăng nhập quản trị -->
+<dialog id="dlg-login">
+  <form method="dialog" id="login-form">
+    <h2>Đăng nhập quản trị</h2>
+    <label class="field">Mật khẩu <input id="login-pw" type="password" autocomplete="current-password" required></label>
+    <p id="login-msg" class="error" role="alert"></p>
+    <div class="row-end"><button type="button" id="login-cancel" class="ghost">Hủy</button><button type="submit" class="primary">Đăng nhập</button></div>
+  </form>
+</dialog>
+
+<!-- Hộp thoại lập bản đồ chuyên đề: chọn chỉ số và tháng, xem trước ngay, tải ảnh PNG -->
+<dialog id="dlg-theme">
+  <div class="theme-head"><b>Lập bản đồ chuyên đề</b>
+    <span><button id="th-download" class="primary" type="button">Tải ảnh PNG</button>
+    <button id="th-close" class="ghost" type="button">Đóng</button></span></div>
+  <div class="theme-opts">
+    <label class="field">Chỉ số
+      <select id="th-metric"><option value="tvdi">TVDI (khô hạn)</option><option value="lst">LST (nhiệt độ bề mặt)</option><option value="ndvi">NDVI (thực vật)</option></select>
+    </label>
+    <label class="field">Tháng / năm <select id="th-period"></select></label>
+    <label class="field grow">Tên bản đồ <input id="th-title" type="text" placeholder="Để trống: tự đặt tên theo chỉ số, hiện trạng/dự báo và tháng"></label>
+    <label class="chk"><input type="checkbox" id="th-grid" checked> Tọa độ</label>
+    <label class="chk"><input type="checkbox" id="th-north" checked> La bàn</label>
+    <label class="chk"><input type="checkbox" id="th-scale" checked> Tỷ lệ</label>
+    <label class="chk"><input type="checkbox" id="th-labels"> Ghi số liệu</label>
+  </div>
+  <div class="theme-body"><canvas id="th-canvas" aria-label="Bản đồ chuyên đề"></canvas></div>
+</dialog>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
