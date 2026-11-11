@@ -27,21 +27,39 @@ def clean(s: str) -> str:
     return t
 
 
+
 def build_lookup(names: List[str]):
-    exact: Dict[str, int] = {}
+    exact: Dict[str, List[int]] = {}
     by_clean: Dict[str, List[int]] = {}
+
+    def norm_exact(s: str) -> str:
+        """Chuẩn hóa chữ nhưng giữ nguyên dấu tiếng Việt."""
+        t = unicodedata.normalize("NFC", str(s or "")).casefold()
+        return re.sub(r"\s+", " ", t).strip()
+
     for i, n in enumerate(names):
-        exact.setdefault(norm(n), i)
+        exact.setdefault(norm_exact(n), []).append(i)
         by_clean.setdefault(clean(n), []).append(i)
 
     def find(name: str) -> Optional[int]:
-        k = norm(name)
-        if k in exact:
-            return exact[k]
+        # Ưu tiên tên chính xác, có phân biệt dấu
+        k = norm_exact(name)
+        hit = exact.get(k, [])
+
+        if len(hit) == 1:
+            return hit[0]
+
+        if len(hit) > 1:
+            return None
+
+        # Chỉ tìm theo tên bỏ dấu khi kết quả là duy nhất
         c = clean(name)
         hit = by_clean.get(c, [])
-        return hit[0] if len(hit) == 1 else None      # trùng tên sau khi bỏ tiền tố -> không đoán
+
+        return hit[0] if len(hit) == 1 else None
+
     return find
+
 
 
 def level_of(v: Optional[float]) -> Optional[int]:
