@@ -298,6 +298,10 @@ function initMap() {
   state.map = map;
   state.mapReady = false;
 
+  // 5b. Hộp thông tin khi rê chuột (trước đây chưa được tạo nên rê chuột không hiện gì)
+  if (state.popup) state.popup.remove();
+  state.popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12, maxWidth: "260px" });
+
   // 6. Khi bản đồ tải thành công
   map.on("load", () => {
     console.log("Esri Light Gray đã tải thành công.");

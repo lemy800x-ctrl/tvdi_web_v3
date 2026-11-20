@@ -242,3 +242,6 @@ tr.click:hover td { background: var(--accent-soft); }
 .tc-formula { margin-top: 10px; }
 .tc-formula summary { cursor: pointer; font-weight: 600; }
 .tc-formula ul { list-style: disc; padding-left: 18px; margin: 6px 0; display: grid; gap: 2px; }
+
+/* Hộp thông tin khi rê chuột: không chặn chuột để không nhấp nháy */
+.maplibregl-popup { pointer-events: none; z-index: 8; }
