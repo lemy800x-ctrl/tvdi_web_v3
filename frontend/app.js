@@ -372,6 +372,8 @@ function popupContent(i) {
   box.append(el("b", { text: d.wards[i] }));
   const M = METRICS[state.metric];
   box.append(el("div", { text: `${M.label}: ${fmtMetric(state.metric, d[state.metric][i][m])}` }));
+  const per = d.months[m];
+  box.append(el("div", { class: "muted", text: `${periodText(per)} - ${per.loai === "du_bao" ? "dự báo" : "hiện trạng"}` }));
   if (state.metric === "tvdi") {
     const k = classIndex(TVDI_CLASSES, d.tvdi[i][m]);
     if (k >= 0) box.append(el("div", { text: `Mức: ${TVDI_CLASSES[k].label}` }));
@@ -852,7 +854,7 @@ async function loadModelTab() {
     ? `Dự báo các tháng tới dùng: ${state.data.forecast_model}. Mô hình học phần lệch của TVDI so với trung bình nhiều năm của từng phường/xã theo từng tháng (kèm mùa vụ), rồi dự báo lần lượt từng tháng. Kết quả dự báo được giữ nguyên, không điều chỉnh sau khi tính.`
     : "Chưa có thông tin mô hình dự báo.";
   try {
-    const [models, verify, edge] = await Promise.all([api("/api/models"), api("/api/verify"), api("/api/edge-r2")]);
+    const [models, verify, edge] = await Promise.all([adminCall("/api/models"), adminCall("/api/verify"), adminCall("/api/edge-r2")]);
     const tb = document.querySelector("#model-table tbody"); tb.replaceChildren();
     models.forEach((m) => tb.append(el("tr", {}, [el("td", { text: m.mo_hinh }), el("td", { text: fmt(m.mae, 4) }), el("td", { text: fmt(m.rmse, 4) }),
       el("td", { text: fmt(m.r2, 3) }), el("td", { text: m.so_voi_khi_hau === null ? "-" : (m.so_voi_khi_hau > 0 ? "+" : "") + fmt(m.so_voi_khi_hau * 100, 1) + "%" })])));
@@ -892,6 +894,8 @@ const UPLOADS = [
 ];
 function setAdmin(on) {
   $("tab-admin").hidden = !on;
+  $("tab-model").hidden = !on;
+  if (!on && currentTab() === "model") showTab("overview");
   $("btn-admin").textContent = on ? "Quản trị ✓" : "Quản trị";
   if (!on) { state.token = null; sessionStorage.removeItem("adm"); if (currentTab() === "admin") showTab("overview"); }
 }
@@ -1017,6 +1021,7 @@ function setupChat() {
    ===================================================================== */
 const currentTab = () => (document.querySelector(".tabs button[aria-selected='true']") || {}).dataset?.tab;
 function showTab(name) {
+  if (name === "model" && !state.token) name = "overview";   // thông tin mô hình chỉ dành cho quản trị
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   document.querySelectorAll(".panel").forEach((p) => { p.hidden = p.dataset.panel !== name; });
   if (name === "model") loadModelTab();
@@ -1081,6 +1086,105 @@ function bindUI() {
   window.addEventListener("resize", () => state.map && state.map.resize());
 }
 
+
+/* =====================================================================
+   TÍNH LỢI ÍCH TRỒNG CÂY XANH
+   ===================================================================== */
+const TC_O2_RATIO = 0.727;
+const TC_FIELDS = [
+  { k: "N", label: "Số cây (N)", unit: "cây", def: "1.000" },
+  { k: "T", label: "Số năm (T)", unit: "năm", def: "10" },
+  { k: "C", label: "CO₂ hấp thụ (C)", unit: "kg/cây/năm", def: "20" },
+  { k: "B", label: "Sinh khối (B)", unit: "kg/cây/năm", def: "12" },
+  { k: "S", label: "Diện tích tán (S)", unit: "m²/cây", def: "15" },
+  { k: "R", label: "Nước giữ lại (R)", unit: "lít/cây/năm", def: "300" },
+  { k: "F", label: "Hệ số tán không chồng lấn (f)", unit: "0-1", def: "1" },
+  { k: "P1", label: "Giá carbon (P₁)", unit: "đ/tấn CO₂", def: "300.000" },
+  { k: "P2", label: "Giá sinh khối (P₂)", unit: "đ/kg", def: "1.000" },
+  { k: "P3", label: "Giá nước (P₃)", unit: "đ/m³", def: "10.000" },
+  { k: "CI", label: "Chi phí đầu tư", unit: "đồng", def: "0" },
+  { k: "CB", label: "Chi phí bảo dưỡng", unit: "đồng", def: "0" },
+];
+const TC_SCENARIOS = {
+  all: { label: "Tổng hợp tất cả lợi ích", show: ["co2", "o2", "bio", "shade", "water", "g1", "g2", "g3"] },
+  carbon: { label: "Chỉ hấp thụ CO₂ và tạo O₂", show: ["co2", "o2", "g1"] },
+  biomass: { label: "Chỉ sinh khối tăng thêm", show: ["bio", "g2"] },
+  shade: { label: "Chỉ diện tích bóng mát", show: ["shade"] },
+  water: { label: "Chỉ nước mưa giữ lại", show: ["water", "g3"] },
+};
+const TC_ROWS = [
+  ["co2", "CO₂ hấp thụ", (r) => tcFmt(r.co2, 2, 2) + " tấn"],
+  ["o2", "O₂ tạo ra", (r) => tcFmt(r.o2, 2, 2) + " tấn"],
+  ["bio", "Sinh khối tăng thêm", (r) => tcFmt(r.bio, 0, 2) + " kg"],
+  ["shade", "Diện tích bóng mát", (r) => tcFmt(r.shade, 0, 2) + " m²"],
+  ["water", "Nước mưa giữ lại", (r) => tcFmt(r.water, 0, 2) + " m³"],
+  ["g1", "Giá trị carbon", (r) => tcFmt(r.g1, 0, 0) + " đ"],
+  ["g2", "Giá trị sinh khối", (r) => tcFmt(r.g2, 0, 0) + " đ"],
+  ["g3", "Giá trị nước mưa giữ lại", (r) => tcFmt(r.g3, 0, 0) + " đ"],
+];
+function tcFmt(n, minF = 0, maxF = 2) { return Number(n).toLocaleString("vi-VN", { minimumFractionDigits: minF, maximumFractionDigits: maxF }); }
+/* Số kiểu Việt Nam: "1.000" = 1000; "1,5" = 1,5; "0.5" cũng hiểu là 0,5 */
+function parseVN(s) {
+  s = String(s).trim();
+  if (!s) return NaN;
+  if (s.includes(",")) return Number(s.replace(/\./g, "").replace(",", "."));
+  if (/^\d{1,3}(\.\d{3})+$/.test(s)) return Number(s.replace(/\./g, ""));
+  return Number(s);
+}
+function computeTreeBenefits(v, scenario) {
+  const sc = TC_SCENARIOS[scenario] || TC_SCENARIOS.all, on = sc.show;
+  const co2 = (v.N * v.C * v.T) / 1000, o2 = co2 * TC_O2_RATIO;
+  const bio = v.N * v.B * v.T, shade = v.N * v.S * v.F, water = (v.N * v.R * v.T) / 1000;
+  const g1 = co2 * v.P1, g2 = bio * v.P2, g3 = water * v.P3;
+  const gross = (on.includes("g1") ? g1 : 0) + (on.includes("g2") ? g2 : 0) + (on.includes("g3") ? g3 : 0);
+  return { co2, o2, bio, shade, water, g1, g2, g3, gross, total: gross - v.CI - v.CB, show: on };
+}
+function readTreeInputs() {
+  const v = {};
+  for (const f of TC_FIELDS) {
+    const x = parseVN($("tc-" + f.k).value);
+    if (!Number.isFinite(x) || x < 0) return { error: `Giá trị không hợp lệ ở ô "${f.label}". Hãy nhập số không âm.` };
+    v[f.k] = x;
+  }
+  if (v.F > 1) return { error: "Hệ số f phải nằm trong khoảng 0-1." };
+  return { v };
+}
+function renderTreeCalc() {
+  const { v, error } = readTreeInputs();
+  $("tc-error").textContent = error || "";
+  if (error) return;
+  const sc = $("tc-scenario").value, r = computeTreeBenefits(v, sc);
+  $("tc-res-title").textContent = `Kết quả ước tính (${TC_SCENARIOS[sc].label})`;
+  const tb = document.querySelector("#tc-table tbody"); tb.replaceChildren();
+  TC_ROWS.forEach(([k, name, f]) => {
+    const on = r.show.includes(k);
+    tb.append(el("tr", { class: on ? "" : "off" }, [el("td", { text: name }), el("td", { text: on ? f(r) : "-" })]));
+  });
+  tb.append(el("tr", { class: "tc-total" }, [el("td", { text: "Tổng lợi ích quy đổi (giả định)" }), el("td", { text: tcFmt(r.total, 0, 0) + " đ" })]));
+  $("tc-note").textContent = sc === "shade" ? "Diện tích bóng mát không quy đổi ra tiền nên tổng lợi ích chỉ phản ánh chi phí (nếu có)."
+    : (v.CI + v.CB > 0 ? "Tổng lợi ích đã trừ chi phí đầu tư và bảo dưỡng." : "Chưa nhập chi phí đầu tư/bảo dưỡng nên tổng lợi ích chưa trừ chi phí.");
+}
+function resetTreeCalc() {
+  TC_FIELDS.forEach((f) => { $("tc-" + f.k).value = f.def; });
+  $("tc-scenario").value = "all";
+  renderTreeCalc();
+}
+function setupTreeCalc() {
+  const box = $("tc-fields");
+  TC_FIELDS.forEach((f) => {
+    const inp = el("input", { id: "tc-" + f.k, type: "text", inputmode: "decimal", value: f.def });
+    inp.addEventListener("input", renderTreeCalc);
+    box.append(el("label", { class: "field" }, [document.createTextNode(`${f.label} (${f.unit})`), inp]));
+  });
+  const sel = $("tc-scenario");
+  Object.entries(TC_SCENARIOS).forEach(([k, s]) => sel.append(el("option", { value: k, text: s.label })));
+  sel.addEventListener("change", renderTreeCalc);
+  $("btn-trees").addEventListener("click", () => { renderTreeCalc(); $("dlg-trees").showModal(); });
+  $("tc-close").addEventListener("click", () => $("dlg-trees").close());
+  $("tc-reset").addEventListener("click", resetTreeCalc);
+  renderTreeCalc();
+}
+
 function showFatal(msg) {
   const hasData = !!state.data;
   state.error = msg; renderNotice();
@@ -1088,7 +1192,7 @@ function showFatal(msg) {
 }
 
 async function init() {
-  bindUI(); drawLegend(); initMap(); setupChat();
+  bindUI(); drawLegend(); initMap(); setupChat(); setupTreeCalc();
   if (state.token) setAdmin(true);
   try { await loadAll(); } catch (e) { showFatal(e.message); }
 }

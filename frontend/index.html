@@ -30,6 +30,7 @@
       <button data-view="3d">3D</button>
     </div>
     <span class="spacer"></span>
+    <button id="btn-trees" class="ghost" type="button" title="Tính lợi ích trồng cây xanh">Lợi ích cây xanh</button>
     <button id="btn-theme" class="primary" type="button" title="Lập bản đồ chuyên đề cho tháng đang xem">Lập bản đồ chuyên đề</button>
     <button id="btn-admin" class="ghost" type="button">Quản trị</button>
     <button id="btn-rail" class="ghost only-mobile" type="button" aria-expanded="false">Thông tin</button>
@@ -90,7 +91,7 @@
     <div class="tabs" role="tablist" aria-label="Nội dung">
       <button role="tab" data-tab="overview" aria-selected="true">Tổng quan</button>
       <button role="tab" data-tab="rank" aria-selected="false">Xếp hạng &amp; lọc</button>
-      <button role="tab" data-tab="model" aria-selected="false">Mô hình</button>
+      <button role="tab" data-tab="model" aria-selected="false" id="tab-model" hidden>Mô hình (QT)</button>
       <button role="tab" data-tab="admin" aria-selected="false" id="tab-admin" hidden>Quản trị</button>
     </div>
 
@@ -227,6 +228,31 @@
     <label class="chk"><input type="checkbox" id="th-labels"> Ghi số liệu</label>
   </div>
   <div class="theme-body"><canvas id="th-canvas" aria-label="Bản đồ chuyên đề"></canvas></div>
+</dialog>
+
+
+<!-- Hộp thoại tính lợi ích trồng cây xanh -->
+<dialog id="dlg-trees">
+  <div class="theme-head"><b>Tính lợi ích trồng cây xanh</b>
+    <span><button id="tc-reset" class="ghost" type="button">Đặt lại</button>
+    <button id="tc-close" class="ghost" type="button">Đóng</button></span></div>
+  <label class="field">Kịch bản tính toán <select id="tc-scenario"></select></label>
+  <div id="tc-fields" class="tc-grid"></div>
+  <p id="tc-error" class="error" role="alert"></p>
+  <h3 id="tc-res-title">Kết quả ước tính</h3>
+  <div class="table-wrap"><table id="tc-table"><tbody></tbody></table></div>
+  <p id="tc-note" class="muted small"></p>
+  <details class="tc-formula"><summary>Công thức và ký hiệu</summary>
+    <ul class="small">
+      <li>CO₂ = N × C × T / 1000 (tấn); O₂ = CO₂ × 0,727 (tấn)</li>
+      <li>Sinh khối B<sub>total</sub> = N × B × T (kg); Diện tích bóng mát S<sub>total</sub> = N × S × f (m²)</li>
+      <li>Nước mưa giữ lại V = N × R × T / 1000 (m³)</li>
+      <li>G₁ = CO₂ × P₁; G₂ = N × B × T × P₂; G₃ = V × P₃</li>
+      <li>G<sub>tổng</sub> = G₁ + G₂ + G₃ − C<sub>đầu tư</sub> − C<sub>bảo dưỡng</sub></li>
+      <li>N: số cây; T: số năm; C: CO₂ hấp thụ/cây/năm; B: sinh khối/cây/năm; S: diện tích tán/cây; R: nước giữ lại/cây/năm; f: hệ số tán không chồng lấn (0–1)</li>
+    </ul>
+    <p class="small muted">Lưu ý: G₁ và G₂ có thể trùng một phần vì carbon hấp thụ nằm trong sinh khối. Diện tích bóng mát không quy đổi ra tiền.</p>
+  </details>
 </dialog>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
