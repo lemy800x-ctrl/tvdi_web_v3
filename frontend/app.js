@@ -415,7 +415,8 @@ function selectWard(i, zoom) {
   if (state.layersReady) state.map.setFilter("wards-sel", ["==", ["get", "idx"], i]);
   if (zoom && state.layersReady) {
     const b = bboxOfFeatures([state.geo.features[i]]);
-    state.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 80, maxZoom: 13, duration: 700 });
+    const chatOpen = !$("chat-panel").hidden && window.innerWidth > 900;
+    state.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: { top: 90, bottom: 190, left: chatOpen ? 400 : 80, right: 80 }, maxZoom: 13, duration: 700 });
   }
   renderWard();
 }
@@ -951,46 +952,51 @@ async function doLogin(ev) {
    TRỢ LÝ HỎI ĐÁP (chạy hoàn toàn trên trình duyệt, theo quy tắc, chưa dùng mô hình ngôn ngữ)
    ===================================================================== */
 function chatAnswer(q) {
-  const d = state.data, t = " " + norm(q) + " ", p = curPeriod();
-  // 1. Chuyển tháng: "tháng 5/2026", "3/2025"
+  const d = state.data, t = " " + norm(q) + " ";
+  let p = curPeriod();
+  // 1. Phường/xã được nhắc tên (tên dài nhất khớp)
+  let best = -1, bl = 0;
+  d.wards.forEach((w, i) => { const c = cleanName(w); if (c.length >= 4 && t.includes(" " + c + " ") && c.length > bl) { best = i; bl = c.length; } });
+  // 2. Chuyển tháng: "tháng 5/2026", "3/2025" (có thể đi kèm tên phường/xã)
   const mm = t.match(/(?:thang\s*)?\b(\d{1,2})\s*[\/-]\s*(20\d\d)\b/) || t.match(/thang\s*(\d{1,2})(?:\s*nam\s*(20\d\d))?/);
+  let moved = "";
   if (mm && Number(mm[1]) >= 1 && Number(mm[1]) <= 12 && !/\b(bao nhieu|tren|duoi)\b/.test(t.replace(mm[0], ""))) {
     const th = Number(mm[1]), nam = mm[2] ? Number(mm[2]) : p.nam;
     const j = d.months.findIndex((x) => x.thang === th && x.nam === nam);
     if (j < 0) return `Chưa có dữ liệu tháng ${th}/${nam}. Dữ liệu từ ${periodText(d.months[0]).toLowerCase()} đến ${periodText(d.months[d.months.length - 1]).toLowerCase()}.`;
-    stopAnim(); goTo(j);
-    return `Đã chuyển bản đồ sang ${periodText(d.months[j]).toLowerCase()} (${d.months[j].loai === "du_bao" ? "dự báo" : "hiện trạng"}).`;
+    stopAnim(); goTo(j); p = curPeriod();
+    moved = `Đã chuyển bản đồ sang ${periodText(d.months[j]).toLowerCase()} (${d.months[j].loai === "du_bao" ? "dự báo" : "hiện trạng"}).`;
+    if (best < 0) return moved;
   }
-  // 2. Chỉ số được hỏi
-  const metric = /\b(lst|nhiet do|nong|mat)\b/.test(t) ? "lst" : /\b(ndvi|thuc vat|cay xanh|xanh|cay)\b/.test(t) ? "ndvi" : /\b(tvdi|kho han|kho|am)\b/.test(t) ? "tvdi" : state.metric;
-  const M = METRICS[metric], vals = column(metric, state.idx);
-  if (vals.every((v) => v === null)) return `Tháng này chưa có dữ liệu ${M.label} (các tháng dự báo chỉ có TVDI).`;
-  // 3. Phường/xã được nhắc tên (tên dài nhất khớp)
-  let best = -1, bl = 0;
-  d.wards.forEach((w, i) => { const c = cleanName(w); if (c.length >= 4 && t.includes(" " + c + " ") && c.length > bl) { best = i; bl = c.length; } });
+  // 3. Hỏi về một phường/xã: phóng to bản đồ vào phường/xã đó rồi trả lời
   if (best >= 0) {
     selectWard(best, true); showTab("overview");
-    const lines = [`${d.wards[best]} - ${periodText(p).toLowerCase()} (${p.loai === "du_bao" ? "dự báo" : "hiện trạng"}):`];
+    const lines = moved ? [moved] : [];
+    lines.push(`${d.wards[best]} - ${periodText(p).toLowerCase()} (${p.loai === "du_bao" ? "dự báo" : "hiện trạng"}):`);
     ["tvdi", "lst", "ndvi"].forEach((k) => { const v = d[k][best][state.idx]; if (v !== null) lines.push(`${METRICS[k].label}: ${fmtMetric(k, v)}`); });
     if (/du bao|sap toi|tuong lai/.test(t)) {
       d.months.forEach((x, m) => { if (x.loai === "du_bao") lines.push(`${periodText(x)}: TVDI dự báo ${fmt(d.tvdi[best][m])}`); });
     }
     return lines.join("\n");
   }
-  // 4. Xếp hạng / cực trị
+  // 4. Chỉ số được hỏi
+  const metric = /\b(lst|nhiet do|nong|mat)\b/.test(t) ? "lst" : /\b(ndvi|thuc vat|cay xanh|xanh|cay)\b/.test(t) ? "ndvi" : /\b(tvdi|kho han|kho|am)\b/.test(t) ? "tvdi" : state.metric;
+  const M = METRICS[metric], vals = column(metric, state.idx);
+  if (vals.every((v) => v === null)) return `Tháng này chưa có dữ liệu ${M.label} (các tháng dự báo chỉ có TVDI).`;
+  // 5. Xếp hạng / cực trị
   const asc = /\b(thap nhat|it nhat|am nhat|mat nhat|it cay|kem nhat)\b/.test(t), desc = /\b(cao nhat|nhieu nhat|kho nhat|nong nhat|xanh nhat|nhieu cay|top)\b/.test(t);
   if (asc || desc || /xep hang/.test(t)) {
     const order = asc ? "asc" : "desc", top = rankIndices(vals, order).slice(0, 5);
     return `Top 5 ${M.label} ${order === "desc" ? "cao" : "thấp"} nhất, ${periodText(p).toLowerCase()}:\n` + top.map((i, r) => `${r + 1}. ${d.wards[i]}: ${fmtMetric(metric, vals[i])}`).join("\n");
   }
-  // 5. Đếm theo ngưỡng: "bao nhiêu phường có LST trên 40"
+  // 6. Đếm theo ngưỡng: "bao nhiêu phường có LST trên 40"
   const num = t.replace(/(\d{1,2})\s*[\/-]\s*20\d\d/, "").match(/(-?\d+(?:[.,]\d+)?)/);
   if (/bao nhieu|so luong|may phuong/.test(t) && num) {
     const a = parseFloat(num[1].replace(",", ".")), lower = /duoi|nho hon|thap hon|<|it hon/.test(t);
     const n = vals.filter((v) => compare(lower ? "lt" : "gt", v, a)).length;
     return `Có ${n}/${vals.length} phường/xã có ${M.label} ${lower ? "dưới" : "trên"} ${fmt(a, M.dec)}${M.unit} (${periodText(p).toLowerCase()}).`;
   }
-  // 6. Trung bình / dự báo chung
+  // 7. Trung bình / dự báo chung
   if (/du bao|sap toi|tuong lai/.test(t)) {
     const fl = d.months.map((x, m) => [x, m]).filter(([x]) => x.loai === "du_bao");
     if (!fl.length) return "Chưa có dữ liệu dự báo.";
