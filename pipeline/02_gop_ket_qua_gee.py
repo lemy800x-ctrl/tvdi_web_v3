@@ -1,164 +1,192 @@
-"""
-BƯỚC 2 - Gộp 11 file CSV (TVDI_phuongxa_2016.csv ... TVDI_phuongxa_2026.csv) từ Earth Engine.
-
-Tải 11 file từ Google Drive (thư mục TVDI_PhuongXa_v2) về cùng 1 thư mục, rồi chạy:
-    python 02_gop_ket_qua_gee.py "D:\\duong_dan\\thu_muc_chua_csv"
-
-Kết quả (ghi vào thư mục hiện tại):
-    tvdi_phuong_xa_full.csv     DỮ LIỆU THẬT (quan trắc): dùng để học máy, chỉ dòng trang_thai = OK được dùng
-    tvdi_phuong_xa_hienthi.csv  DÙNG CHO WEB: giống file trên nhưng các tháng thiếu ảnh được LẤP bằng số ước lượng
-                                và có cột nguon = quan_trac | noi_suy | khi_hau để web ghi rõ là ước lượng
-    thong_so_bien_full.csv      hệ số cạnh khô/ướt và R² từng tháng
-
-Cách lấp chỗ trống (chỉ để hiển thị, KHÔNG dùng để huấn luyện):
-    noi_suy : thiếu <= MAX_GAP tháng liên tiếp -> nội suy tuyến tính phần lệch so với trung bình nhiều năm
-    khi_hau : thiếu lâu hơn -> dùng trung bình nhiều năm của đúng phường/xã đó, đúng tháng đó
-
-Cài thư viện:  pip install numpy pandas
-"""
 import sys
 from pathlib import Path
-
-import numpy as np
 import pandas as pd
+import numpy as np
 
-MAX_GAP = 3        # nội suy nếu thiếu tối đa 3 tháng liên tiếp
-COT_BAT_BUOC = ["fullname", "nam", "thang", "tvdi_mean", "lst_mean", "ndvi_mean", "trang_thai"]
-
-
-def lap_day(M, moy, lo, hi, max_gap=MAX_GAP):
-    """
-    M: ma trận (phường/xã x tháng) giá trị quan trắc, NaN nếu thiếu; moy: tháng trong năm (0..11) của từng cột.
-    Trả về (ma trận đã lấp, nguồn) với nguồn: 0 = quan trắc, 1 = nội suy, 2 = trung bình nhiều năm, -1 = không có.
-    """
-    n, T = M.shape
-    with np.errstate(all="ignore"):
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            clim = np.full((n, 12), np.nan)
-            for k in range(12):
-                cols = np.where(moy == k)[0]
-                if len(cols):
-                    clim[:, k] = np.nanmean(M[:, cols], axis=1)
-            mean_w = np.nanmean(M, axis=1)
-    clim = np.where(np.isnan(clim), mean_w[:, None], clim)
-    A = M - clim[:, moy]
-    out, src = M.copy(), np.zeros((n, T), dtype=int)
-    for i in range(n):
-        valid = np.where(~np.isnan(M[i]))[0]
-        if len(valid) == 0:
-            src[i, :] = -1
-            continue
-        for t in np.where(np.isnan(M[i]))[0]:
-            prev, nxt = valid[valid < t], valid[valid > t]
-            if len(prev) and len(nxt) and (nxt[0] - prev[-1] - 1) <= max_gap:
-                p, q = prev[-1], nxt[0]
-                a = A[i, p] + (A[i, q] - A[i, p]) * (t - p) / (q - p)
-                src[i, t] = 1
-            else:
-                a, src[i, t] = 0.0, 2
-            out[i, t] = np.clip(clim[i, moy[t]] + a, lo, hi)
-    return out, src
+COT_BAT_BUOC = ["ward_uid", "fullname", "nam", "thang", "tvdi_mean", "lst_mean", "ndvi_mean", "trang_thai"]
+TVDI_LOP = [0.2, 0.4, 0.6, 0.8]
+NHAN_MUC = ["Rất ẩm", "Ẩm", "Trung bình", "Khô", "Rất khô"]
 
 
-def tao_file_hien_thi(out):
-    """Từ bảng đã gộp, tạo bảng đầy đủ mọi phường/xã x mọi tháng, lấp tháng thiếu và ghi rõ nguồn."""
-    keys = sorted(set(zip(out["nam"], out["thang"])))
-    (y0, m0), (y1, m1) = keys[0], keys[-1]
-    months = [(y, m) for y in range(y0, y1 + 1) for m in range(1, 13) if (y0, m0) <= (y, m) <= (y1, m1)]
-    midx = {k: i for i, k in enumerate(months)}
-    wards = sorted(out["fullname"].unique())
-    widx = {w: i for i, w in enumerate(wards)}
-    moy = np.array([m - 1 for _, m in months])
-    wi = out["fullname"].map(widx).to_numpy()
-    mi = np.array([midx[(a, b)] for a, b in zip(out["nam"], out["thang"])])
-    ok = ((out["trang_thai"] == "OK") & out["tvdi"].notna()).to_numpy()      # chỉ ảnh dùng được mới là quan trắc
+def kiem_tra_dinh_danh(raw: pd.DataFrame, ky_vong: int | None):
+    """Kiểm tra toàn vẹn 167 phường/xã: trùng mã, trùng tên, trùng dòng hoặc thiếu tháng đều DỪNG và báo rõ."""
+    loi = []
+    n_ten = raw["fullname"].nunique()
+    if "ward_uid" in raw.columns:
+        raw["ward_uid"] = raw["ward_uid"].astype(str).str.strip()
+        n_uid = raw["ward_uid"].nunique()
+        trung_ten = raw.groupby("fullname")["ward_uid"].nunique()
+        print(f"Số mã phường/xã (ward_uid): {n_uid} | Số tên khác nhau: {n_ten}")
+        if (trung_ten > 1).any():
+            ds = ", ".join(trung_ten[trung_ten > 1].index[:10])
+            loi.append(f"{int((trung_ten > 1).sum())} tên dùng chung cho nhiều phường/xã (ví dụ: {ds}).")
+        khoa = "ward_uid"
+    else:
+        print(f"Số tên phường/xã khác nhau: {n_ten} (không có cột ward_uid)")
+        khoa = "fullname"
 
-    filled, src = {}, None
-    for col, lo, hi in (("tvdi", 0.0, 1.0), ("lst", -10.0, 70.0), ("ndvi", -0.2, 1.0)):
-        M = np.full((len(wards), len(months)), np.nan)
-        M[wi[ok], mi[ok]] = out[col].to_numpy(dtype=float)[ok]
-        filled[col], s_ = lap_day(M, moy, lo, hi)
-        src = s_ if src is None else src            # cả 3 biến có cùng mẫu thiếu nên nguồn giống nhau
+    dup = raw.duplicated([khoa, "nam", "thang"]).sum()
+    if dup:
+        loi.append(f"Phát hiện {dup} dòng trùng (phường/xã, năm, tháng).")
 
-    info = out.drop_duplicates(["fullname", "nam", "thang"]).set_index(["fullname", "nam", "thang"])
-    rows = []
-    nguon_ten = {0: "quan_trac", 1: "noi_suy", 2: "khi_hau", -1: "khong_co"}
-    for i, w in enumerate(wards):
-        for t, (y, m) in enumerate(months):
-            r = info.loc[(w, y, m)] if (w, y, m) in info.index else None
-            k = src[i, t]
-            rows.append({"fullname": w, "nam": y, "thang": m,
-                         "ndvi": None if k == -1 else round(float(filled["ndvi"][i, t]), 4),
-                         "lst": None if k == -1 else round(float(filled["lst"][i, t]), 2),
-                         "tvdi": None if k == -1 else round(float(filled["tvdi"][i, t]), 4),
-                         "nguon": nguon_ten[k],
-                         "so_anh": None if r is None else r.get("so_anh"), "so_pixel": None if r is None else r.get("so_pixel"),
-                         "trang_thai_goc": None if r is None else r.get("trang_thai")})
-    return pd.DataFrame(rows)
+    if ky_vong and n_ten != ky_vong:
+        loi.append(f"Có {n_ten} phường/xã nhưng kỳ vọng {ky_vong}. Kiểm tra lại các file H1/H2 đã tải đủ chưa.")
+
+    per_month = raw.groupby(["nam", "thang"])[khoa].nunique()
+    if per_month.nunique() > 1:
+        thieu = ", ".join(f"{int(m):02d}/{int(y)}={n}" for (y, m), n in per_month[per_month < per_month.max()].head(8).items())
+        loi.append("Số phường/xã mỗi tháng không đều: " + thieu)
+
+    if loi:
+        raise SystemExit("DỪNG vì dữ liệu không toàn vẹn:\n - " + "\n - ".join(loi))
 
 
-def main(thu_muc):
-    files = sorted(Path(thu_muc).glob("TVDI_phuongxa_*.csv"))
+def bao_cao_phan_bo(ok: pd.DataFrame):
+    """Thống kê phân bố TVDI cấp phường/xã (chỉ tính trên các dòng trạng thái OK)."""
+    if len(ok) == 0:
+        print("\n! CẢNH BÁO: Không có dòng nào đạt trạng thái OK.")
+        return
+
+    q = ok["tvdi_mean"].quantile([0.05, 0.25, 0.5, 0.75, 0.95]).round(3)
+    print("\nPhân bố TVDI cấp phường/xã (dòng OK): " + " | ".join(f"p{int(k*100)}={v}" for k, v in q.items()))
+
+    muc = pd.cut(ok["tvdi_mean"], [-0.001] + TVDI_LOP + [1.001], labels=NHAN_MUC)
+    print("Tỷ lệ theo mức: " + ", ".join(f"{k} {v:.1%}" for k, v in muc.value_counts(normalize=True).sort_index().items()))
+
+    span = q[0.95] - q[0.05]
+    tb = (muc == "Trung bình").mean()
+    if span < 0.35 or tb > 0.55:
+        print(f"! Lưu ý: TVDI hơi tập trung ở giữa (p95 - p5 = {span:.2f}, {tb:.0%} ở mức Trung bình).")
+
+    sd_ward = ok.groupby("fullname")["tvdi_mean"].mean().std()
+    print(f"Độ lệch chuẩn của TVDI trung bình giữa các phường/xã: {sd_ward:.3f}")
+
+
+def kiem_tra_canh(thu_muc: Path):
+    """Gộp 4 file canh_theo_mua_Q1..Q4.csv (hoặc đọc canh_theo_mua.csv) và kiểm tra tham số."""
+    q_files = sorted(thu_muc.glob("canh_theo_mua_Q*.csv"))
+    single_file = thu_muc / "canh_theo_mua.csv"
+
+    if q_files:
+        e = pd.concat([pd.read_csv(f) for f in q_files], ignore_index=True).sort_values("m").reset_index(drop=True)
+    elif single_file.exists():
+        e = pd.read_csv(single_file).sort_values("m").reset_index(drop=True)
+    else:
+        print("\n(Chưa thấy file canh_theo_mua*.csv trong thư mục.)")
+        return
+
+    e.to_csv("canh_theo_mua_full.csv", index=False)
+    xau = e[(e["ok"] != 1) | (e["a_dry"] >= 0) | (e["b_dry"] > 65) | (e["b_wet"] < 18)]
+    print(f"\nCạnh khô/ướt theo mùa: {len(e)} tháng, {int((e['ok'] == 1).sum())} tháng đạt kiểm tra vật lý.")
+    cols_show = [c for c in ["m", "n_pts", "so_bin", "a_dry", "b_dry", "r2_dry", "rmse_dry", "b_wet", "ok"] if c in e.columns]
+    print(e[cols_show].round(3).to_string(index=False))
+    if len(xau):
+        print("! Tháng cạnh bất thường (đã gắn nhãn CANH_LOI): " + ", ".join(str(int(m)) for m in xau["m"]))
+
+
+def tao_file_hien_thi(out: pd.DataFrame) -> pd.DataFrame:
+    """Xuất đúng 10 cột chuẩn khớp schema Database của Website & nội suy/lấp khí hậu tháng thiếu ảnh."""
+    df = out.copy()
+
+    # 1. Đổi tên cột sang đúng schema 10 cột của Backend Web
+    df = df.rename(columns={
+        "tvdi_mean": "tvdi",
+        "lst_mean": "lst",
+        "ndvi_mean": "ndvi",
+        "so_pixel_hop_le": "so_pixel",
+        "trang_thai": "trang_thai_goc",
+    })
+
+    # 2. Chỉ giữ lại giá trị quan trắc thật ở các dòng trang_thai_goc == 'OK'
+    ok_mask = df["trang_thai_goc"] == "OK"
+    for col in ["ndvi", "lst", "tvdi"]:
+        df[col] = np.where(ok_mask, df[col], np.nan)
+
+    # 3. Bước A: Nội suy tuyến tính theo thời gian trong từng phường/xã (giới hạn tối đa 2 tháng liên tiếp)
+    khoa = "ward_uid" if "ward_uid" in df.columns else "fullname"
+    df = df.sort_values([khoa, "nam", "thang"]).reset_index(drop=True)
+    interp_df = df.groupby(khoa)[["ndvi", "lst", "tvdi"]].transform(
+        lambda s: s.interpolate(method="linear", limit=2, limit_area="inside")
+    )
+    interp_mask = (~ok_mask) & interp_df["tvdi"].notna()
+
+    for col in ["ndvi", "lst", "tvdi"]:
+        df[col] = np.where(interp_mask, interp_df[col], df[col])
+
+    # 4. Bước B: Các tháng khuyết dài hơn (chưa nội suy được) -> lấp bằng trung bình khí hậu cùng tháng
+    clim_mask = df["tvdi"].isna()
+    for col in ["ndvi", "lst", "tvdi"]:
+        clim_m = df[ok_mask].groupby([khoa, "thang"])[col].mean()
+        clim_w = df[ok_mask].groupby(khoa)[col].mean()
+        fallback = df.set_index([khoa, "thang"]).index.map(clim_m).to_numpy()
+        fallback_w = df[khoa].map(clim_w).to_numpy()
+        fallback = np.where(np.isnan(fallback), fallback_w, fallback)
+        df[col] = np.where(df[col].isna(), fallback, df[col])
+
+    # 5. Gán cột 'nguon' chuẩn theo quy ước của Website ('quan_trac' | 'noi_suy' | 'khi_hau')
+    df["nguon"] = np.select(
+        [ok_mask, interp_mask, clim_mask],
+        ["quan_trac", "noi_suy", "khi_hau"],
+        default="khi_hau"
+    )
+
+    # 6. Làm tròn & sắp xếp đúng thứ tự 10 cột chuẩn của Database
+    df["ndvi"] = df["ndvi"].round(4)
+    df["lst"] = df["lst"].round(2)
+    df["tvdi"] = df["tvdi"].round(4)
+    df["so_anh"] = df["so_anh"].fillna(0).astype(int)
+    df["so_pixel"] = df["so_pixel"].fillna(0).astype(int)
+
+    cot_web = ["fullname", "nam", "thang", "ndvi", "lst", "tvdi", "nguon", "so_anh", "so_pixel", "trang_thai_goc"]
+    return df.sort_values(["fullname", "nam", "thang"])[cot_web].reset_index(drop=True)
+
+
+def main(thu_muc_str: str, ky_vong: int | None = None):
+    thu_muc = Path(thu_muc_str)
+    if not thu_muc.is_dir():
+        raise SystemExit(f"Không tìm thấy thư mục: {thu_muc}")
+
+    files = sorted(thu_muc.glob("TVDI_phuongxa_*.csv"))
     if not files:
-        raise SystemExit(f"Không thấy file TVDI_phuongxa_*.csv trong: {thu_muc}")
-    print(f"Đọc {len(files)} file: " + ", ".join(f.stem[-4:] for f in files))
-    raw = pd.concat([pd.read_csv(f, dtype={"fullname": str}) for f in files], ignore_index=True)
+        raise SystemExit(f"Không tìm thấy file TVDI_phuongxa_*.csv nào trong {thu_muc}")
 
-    thieu = [c for c in COT_BAT_BUOC if c not in raw.columns]
-    if thieu:
-        raise SystemExit(f"Thiếu cột {thieu}. Các cột hiện có: {list(raw.columns)}")
+    print(f"Đang đọc {len(files)} file CSV từ: {thu_muc}")
+    raw = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+
+    thieu_cot = [c for c in COT_BAT_BUOC if c not in raw.columns]
+    if thieu_cot:
+        raise SystemExit(f"Thiếu các cột bắt buộc: {thieu_cot}")
 
     raw["nam"] = raw["nam"].astype(float).astype(int)
     raw["thang"] = raw["thang"].astype(float).astype(int)
-    raw["fullname"] = raw["fullname"].str.strip()
 
-    out = pd.DataFrame({
-        "fullname": raw["fullname"], "nam": raw["nam"], "thang": raw["thang"],
-        "ndvi": raw["ndvi_mean"].round(4), "lst": raw["lst_mean"].round(2), "tvdi": raw["tvdi_mean"].round(4),
-        "so_pixel": raw.get("so_pixel"), "so_anh": raw.get("so_anh"),
-        "ty_le_hop_le": raw.get("ty_le_hop_le", pd.Series(dtype=float)).round(3),
-        "trang_thai": raw["trang_thai"],
-    }).sort_values(["fullname", "nam", "thang"])
+    kiem_tra_dinh_danh(raw, ky_vong)
 
-    trung = out.duplicated(["fullname", "nam", "thang"]).sum()
-    if trung:
-        print(f"! Có {trung} dòng trùng (phường/xã, tháng): giữ dòng đầu.")
-        out = out.drop_duplicates(["fullname", "nam", "thang"])
-    out.to_csv("tvdi_phuong_xa_full.csv", index=False, encoding="utf-8")
+    # Sắp xếp chuẩn theo mã phường/xã, năm, tháng
+    out = raw.sort_values(["ward_uid", "nam", "thang"]).reset_index(drop=True)
 
-    cot_bien = [c for c in ["nam", "thang", "so_anh", "so_bin", "a_dry", "b_dry", "r2_dry",
-                            "a_wet", "b_wet", "r2_wet"] if c in raw.columns]
-    bien = raw[cot_bien].drop_duplicates(["nam", "thang"]).sort_values(["nam", "thang"])
-    bien.to_csv("thong_so_bien_full.csv", index=False, encoding="utf-8")
+    # Thống kê trạng thái dữ liệu toàn bộ tập dữ liệu
+    print(f"\nTổng số bản ghi: {len(out):,} ({out['nam'].min()}-{out['nam'].max()})")
+    print("Thống kê trạng thái dữ liệu:")
+    for st, cnt in out["trang_thai"].value_counts().items():
+        print(f"  - {st}: {cnt:,} dòng ({cnt / len(out):.1%})")
+
+    out.to_csv("tvdi_phuong_xa_full.csv", index=False, encoding="utf-8-sig")
 
     hien_thi = tao_file_hien_thi(out)
-    hien_thi.to_csv("tvdi_phuong_xa_hienthi.csv", index=False, encoding="utf-8")
-    dem = hien_thi["nguon"].value_counts()
+    hien_thi.to_csv("tvdi_phuong_xa_hienthi.csv", index=False, encoding="utf-8-sig")
 
-    # ---------------- Báo cáo kiểm tra ----------------
-    n_ward = out["fullname"].nunique()
-    n_thang = out[["nam", "thang"]].drop_duplicates().shape[0]
-    print(f"\nSố phường/xã: {n_ward} | số tháng: {n_thang} | số dòng: {len(out):,}")
-    print("Phân loại chất lượng (trang_thai):")
-    print(out["trang_thai"].value_counts().to_string())
-    ok = out[out["trang_thai"] == "OK"]
-    print(f"\nDòng dùng được: {len(ok):,} / {len(out):,} ({len(ok) / len(out):.1%})")
-    thang_xau = (out.groupby(["nam", "thang"])["trang_thai"].apply(lambda s: (s != "OK").mean())
-                 .loc[lambda s: s > 0.5])
-    if len(thang_xau):
-        print("Tháng có hơn 50% phường/xã không dùng được:",
-              ", ".join(f"{m:02d}/{y}" for (y, m) in thang_xau.index))
-    if {"a_dry", "r2_dry"} <= set(bien.columns):
-        print(f"\nHệ số a_dry (cạnh khô, lý thuyết phải ÂM): âm ở "
-              f"{(bien['a_dry'] < 0).mean():.0%} số tháng; R² cạnh khô trung bình {bien['r2_dry'].mean():.3f}")
-    print("\nBảng cho web (lấp tháng thiếu ảnh): " + ", ".join(f"{k} {v:,}" for k, v in dem.items()))
-    print("  quan_trac = ảnh thật | noi_suy = nội suy từ tháng lân cận | khi_hau = trung bình nhiều năm | khong_co = phường/xã không có dữ liệu nào")
-    print("\nĐã ghi: tvdi_phuong_xa_full.csv (học máy), tvdi_phuong_xa_hienthi.csv (web), thong_so_bien_full.csv")
+    ok = out[out["trang_thai"] == "OK"].copy()
+    bao_cao_phan_bo(ok)
+    kiem_tra_canh(thu_muc)
+
+    print("\nĐã ghi thành công:")
+    print("  1. tvdi_phuong_xa_full.csv     (dữ liệu đầy đủ cho phân tích / học máy)")
+    print("  2. tvdi_phuong_xa_hienthi.csv  (10 cột chuẩn schema Web, đã nội suy & lấp khí hậu)")
+    print("  3. canh_theo_mua_full.csv      (bảng tham số cạnh 12 tháng đã gộp)")
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        raise SystemExit('Cách dùng: python 02_gop_ket_qua_gee.py "<thư mục chứa 11 file csv>"')
-    main(sys.argv[1])
+        raise SystemExit('Cách dùng: python 02_gop_ket_qua_gee.py "<thư mục chứa các file csv>" 167')
+    main(sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else None)

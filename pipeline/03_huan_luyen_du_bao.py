@@ -1,29 +1,11 @@
 """
 BƯỚC 3 - Huấn luyện, so sánh mô hình, KIỂM CHỨNG bằng dữ liệu thật 2026 và dự báo tương lai.
 
-Vì sao làm khác bản cũ:
-  TVDI của từng phường/xã rất theo mùa và mỗi phường/xã có mức nền riêng. Nếu chỉ đưa 6 tháng gần nhất
-  vào mô hình thì mô hình không học được gì hơn "đoán bằng trung bình" (R² âm). Ở đây:
-    1. Tính "khí hậu" = TVDI trung bình nhiều năm của TỪNG phường/xã theo TỪNG tháng trong năm
-       (chỉ từ giai đoạn huấn luyện, không nhìn tương lai).
-    2. Mô hình học PHẦN LỆCH so với khí hậu (dị thường), dùng: dị thường 6 tháng trước, dị thường cùng
-       tháng năm trước, tháng trong năm (sin/cos), khí hậu tháng cần dự báo, mức nền của phường/xã.
-    3. So sánh công bằng với 2 mô hình cơ sở: "giữ nguyên tháng trước" và "khí hậu theo tháng".
-  KHÔNG có bước nào chỉnh sửa kết quả dự báo cho "đẹp". Nếu mô hình không hơn khí hậu thì báo cáo đúng như vậy.
-
-Chia thời gian (không xáo trộn):
-    huấn luyện : đến 12/2023        kiểm định : 2024 - 2025        kiểm tra (tương lai thật): 2026
-Kiểm chứng: huấn luyện đến 12/2025, dự báo đệ quy các tháng 2026 rồi so với TVDI thật của đúng các tháng đó.
-Dự báo tương lai: huấn luyện lại trên toàn bộ dữ liệu, dự báo HORIZON tháng tiếp theo.
+Đã cập nhật cho dữ liệu GEE v4.5:
+  - Đọc đúng cột 'tvdi_mean' (tương thích ngược nếu file dùng 'tvdi').
+  - Định danh và xuất kèm 'ward_uid' chuẩn để khớp 1-1 với GeoJSON và Neon Database.
 
 Chạy:   python 03_huan_luyen_du_bao.py tvdi_phuong_xa_full.csv
-Cài:    pip install numpy pandas scikit-learn
-Tùy chọn: pip install xgboost tensorflow   (không có thì tự bỏ qua XGBoost/LSTM/GRU)
-
-Đầu ra:
-    du_bao_phuong_xa.csv            fullname, nam, thang, tvdi_du_bao, mo_hinh, loai (du_bao | kiem_chung)
-    ket_qua_so_sanh_mo_hinh.csv     chỉ số trên giai đoạn kiểm tra 2026 (một bước, dùng TVDI thật làm đầu vào)
-    kiem_chung_tom_tat.csv          sai số theo số tháng dự báo trước (đệ quy), so với khí hậu
 """
 import sys
 import warnings
@@ -65,20 +47,33 @@ PERSIST = "Giữ nguyên tháng trước"
 def doc_ma_tran(path):
     df = pd.read_csv(path, dtype={"fullname": str})
     df["nam"], df["thang"] = df["nam"].astype(int), df["thang"].astype(int)
-    hop_le = (df["trang_thai"] == "OK") & df["tvdi"].notna()
+
+    col_tvdi = "tvdi_mean" if "tvdi_mean" in df.columns else "tvdi"
+    if col_tvdi not in df.columns:
+        raise SystemExit("Không tìm thấy cột 'tvdi_mean' hoặc 'tvdi' trong file đầu vào.")
+
+    if "ward_uid" in df.columns:
+        df["ward_uid"] = df["ward_uid"].astype(str).str.strip()
+    else:
+        df["ward_uid"] = df["fullname"]
+
+    hop_le = (df["trang_thai"] == "OK") & df[col_tvdi].notna()
     print(f"Bỏ {int((~hop_le).sum()):,} / {len(df):,} dòng ảnh hỏng hoặc thiếu ({(~hop_le).mean():.1%}) khỏi học máy.")
-    df.loc[~hop_le, "tvdi"] = np.nan
+    df.loc[~hop_le, col_tvdi] = np.nan
 
     keys = sorted(set(zip(df["nam"], df["thang"])))
     (y0, m0), (y1, m1) = keys[0], keys[-1]
     months = [(y, m) for y in range(y0, y1 + 1) for m in range(1, 13) if (y0, m0) <= (y, m) <= (y1, m1)]
     midx = {k: i for i, k in enumerate(months)}
-    wards = sorted(df["fullname"].unique())
-    widx = {w: i for i, w in enumerate(wards)}
+
+    ward_df = df[["ward_uid", "fullname"]].drop_duplicates().sort_values(["ward_uid", "fullname"]).reset_index(drop=True)
+    wards = list(zip(ward_df["ward_uid"], ward_df["fullname"]))
+    widx = {uid: i for i, (uid, _) in enumerate(wards)}
+
     Y = np.full((len(wards), len(months)), np.nan)
-    wi = df["fullname"].map(widx).to_numpy()
+    wi = df["ward_uid"].map(widx).to_numpy()
     mi = np.array([midx[(a, b)] for a, b in zip(df["nam"], df["thang"])])
-    Y[wi, mi] = df["tvdi"].to_numpy()
+    Y[wi, mi] = df[col_tvdi].to_numpy()
     return Y, wards, months
 
 
@@ -153,8 +148,12 @@ class Bang:
     def __init__(self, m): self.m, self.sc = m, StandardScaler()
     def fit(self, X, S, y, Xv=None, Sv=None, yv=None):
         Xs = self.sc.fit_transform(X)
-        if xgb is not None and isinstance(self.m, xgb.XGBRegressor) and Xv is not None:
-            self.m.fit(Xs, y, eval_set=[(self.sc.transform(Xv), yv)], verbose=False)
+        if xgb is not None and isinstance(self.m, xgb.XGBRegressor):
+            if Xv is not None:
+                self.m.fit(Xs, y, eval_set=[(self.sc.transform(Xv), yv)], verbose=False)
+            else:
+                self.m.set_params(early_stopping_rounds=None)
+                self.m.fit(Xs, y, verbose=False)
         else:
             self.m.fit(Xs, y)
         return self
@@ -206,18 +205,13 @@ def chi_so(y, p):
             "R2": r2_score(y, p), "MAPE": float(np.mean(np.abs((y[m] - p[m]) / y[m])) * 100) if m.any() else np.nan}
 
 
-def du_bao_mot_buoc(mh, Y, C, mean_w, moy, ts, ws, tab, seq):
-    """TVDI dự báo = khí hậu + dị thường dự đoán (một bước, đầu vào là TVDI thật)."""
-    return np.clip(C[ws, moy[ts]] + mh.predict(tab, seq), 0, 1)
-
-
 # ====================== 5. DỰ BÁO ĐỆ QUY ======================
 def du_bao_de_quy(mh, Y, C, mean_w, moy, t_bat_dau, so_buoc):
     """Dự báo từng tháng một; tháng sau dùng dị thường vừa dự báo làm đầu vào. Trả về (so_buoc, n) TVDI."""
     n, T0 = Y.shape
     T = t_bat_dau + so_buoc
     A = np.full((n, max(T, T0)), np.nan)
-    A[:, :t_bat_dau] = Y[:, :t_bat_dau] - C[:, moy[:t_bat_dau]]      # chỉ phần đã biết
+    A[:, :t_bat_dau] = Y[:, :t_bat_dau] - C[:, moy[:t_bat_dau]]
     out = []
     for s in range(so_buoc):
         t = t_bat_dau + s
@@ -238,7 +232,6 @@ def main(path=FILE_VAO):
     t_tr, t_va = midx[TRAIN_END], midx[VAL_END]
     moy = moy_ext(months, T + HORIZON + 12)
 
-    # Bỏ phường/xã có quá ít tháng hợp lệ trong giai đoạn huấn luyện
     du = np.sum(~np.isnan(Y[:, : t_tr + 1]), axis=1) >= MIN_OBS
     print(f"Giữ {du.sum()} / {len(wards)} phường/xã (đủ ≥ {MIN_OBS} tháng hợp lệ để học).")
     Y, wards = Y[du], [w for w, k in zip(wards, du) if k]
@@ -250,7 +243,7 @@ def main(path=FILE_VAO):
     if not co_test:
         print("! Chưa có dữ liệu sau VAL_END: dùng giai đoạn kiểm định làm kiểm tra (kém khách quan).")
 
-    # ---------- Giai đoạn 1: chọn mô hình (khí hậu chỉ từ giai đoạn huấn luyện) ----------
+    # ---------- Giai đoạn 1: chọn mô hình ----------
     C1, w1 = khi_hau(Y, months, t_tr)
     Xtr, Str, ytr, _, _ = dung_tap(Y, C1, w1, moy, N_LAGS, t_tr)
     Xva, Sva, yva, tva, wva = dung_tap(Y, C1, w1, moy, t_tr + 1, t_va)
@@ -267,16 +260,14 @@ def main(path=FILE_VAO):
         ket_qua.append({"mo_hinh": ten, **b, "RMSE_kiem_dinh": a["RMSE"]})
         print(f"[{ten:24s}] kiểm tra: MAE={b['MAE']:.4f} RMSE={b['RMSE']:.4f} R2={b['R2']:.3f} MAPE={b['MAPE']:.1f}%")
 
-    # mô hình cơ sở
     pp = lambda ts, ws: np.where(np.isnan(Y[ws, ts - 1]), C1[ws, moy[ts]], Y[ws, ts - 1])
     ghi(PERSIST, pp(tva, wva), pp(tte, wte))
     ghi(KHI_HAU, C1[wva, moy[tva]], C1[wte, moy[tte]])
 
-    da_hoc = {}
     rf_tot, rf_rmse = None, np.inf
     for ten in danh_sach_mo_hinh():
         try:
-            if ten == "Random Forest":      # thử vài cấu hình, chọn theo kiểm định
+            if ten == "Random Forest":
                 for ts in ParameterGrid({"n_estimators": [100, 200], "max_depth": [6, 10], "min_samples_leaf": [5, 20]}):
                     m = tao_mo_hinh(ten, ts).fit(Xtr, Str, ytr)
                     r = np.sqrt(mean_squared_error(thuc_va, np.clip(C1[wva, moy[tva]] + m.predict(Xva, Sva), 0, 1)))
@@ -286,14 +277,13 @@ def main(path=FILE_VAO):
             p_va = np.clip(C1[wva, moy[tva]] + mh.predict(Xva, Sva), 0, 1)
             p_te = np.clip(C1[wte, moy[tte]] + mh.predict(Xte, Ste), 0, 1)
             ghi(ten, p_va, p_te)
-            da_hoc[ten] = True
-        except Exception as e:           # một mô hình lỗi không làm hỏng cả quy trình
+        except Exception as e:
             print(f"! Bỏ qua {ten}: {e}")
 
     df_kq = pd.DataFrame(ket_qua)
     rmse_te_kh = df_kq.loc[df_kq["mo_hinh"] == KHI_HAU, "RMSE"].iloc[0]
-    df_kq["so_voi_khi_hau"] = 1 - df_kq["RMSE"] / rmse_te_kh        # > 0: tốt hơn khí hậu
-    df_kq.to_csv("ket_qua_so_sanh_mo_hinh.csv", index=False)
+    df_kq["so_voi_khi_hau"] = 1 - df_kq["RMSE"] / rmse_te_kh
+    df_kq.to_csv("ket_qua_so_sanh_mo_hinh.csv", index=False, encoding="utf-8-sig")
 
     ung_vien = {k: v for k, v in rmse_va.items() if k != PERSIST}
     tot = min(ung_vien, key=ung_vien.get)
@@ -320,10 +310,11 @@ def main(path=FILE_VAO):
             tom_tat.append({"thang_du_bao": s + 1, "n": int(ok.sum()), "mae_mo_hinh": a["MAE"], "rmse_mo_hinh": a["RMSE"],
                             "mae_khi_hau": b["MAE"], "rmse_khi_hau": b["RMSE"]})
             y_, m_ = months[t_va + 1 + s]
-            for i, w in enumerate(wards):
-                dong_bd.append({"fullname": w, "nam": y_, "thang": m_, "tvdi_du_bao": round(float(pred[s][i]), 4),
+            for i, (uid, wname) in enumerate(wards):
+                dong_bd.append({"ward_uid": uid, "fullname": wname, "nam": y_, "thang": m_,
+                                "tvdi_du_bao": round(float(pred[s][i]), 4),
                                 "mo_hinh": tot, "loai": "kiem_chung"})
-        pd.DataFrame(tom_tat).to_csv("kiem_chung_tom_tat.csv", index=False)
+        pd.DataFrame(tom_tat).to_csv("kiem_chung_tom_tat.csv", index=False, encoding="utf-8-sig")
         print("\nKIỂM CHỨNG (huấn luyện đến %02d/%d, dự báo đệ quy rồi so với thật):" % (VAL_END[1], VAL_END[0]))
         print(pd.DataFrame(tom_tat).round(4).to_string(index=False))
 
@@ -336,10 +327,11 @@ def main(path=FILE_VAO):
     for s in range(HORIZON):
         m_ += 1
         if m_ > 12: m_, y_ = 1, y_ + 1
-        for i, w in enumerate(wards):
-            dong_bd.append({"fullname": w, "nam": y_, "thang": m_, "tvdi_du_bao": round(float(pred3[s][i]), 4),
+        for i, (uid, wname) in enumerate(wards):
+            dong_bd.append({"ward_uid": uid, "fullname": wname, "nam": y_, "thang": m_,
+                            "tvdi_du_bao": round(float(pred3[s][i]), 4),
                             "mo_hinh": tot, "loai": "du_bao"})
-    pd.DataFrame(dong_bd).to_csv("du_bao_phuong_xa.csv", index=False, encoding="utf-8")
+    pd.DataFrame(dong_bd).to_csv("du_bao_phuong_xa.csv", index=False, encoding="utf-8-sig")
     print(f"\nĐã ghi du_bao_phuong_xa.csv: {len(dong_bd):,} dòng ({n} phường/xã).")
     print("Khoảng giá trị dự báo tương lai: %.2f - %.2f (độ lệch chuẩn giữa phường/xã %.3f)" %
           (pred3.min(), pred3.max(), np.nanstd(pred3[0])))

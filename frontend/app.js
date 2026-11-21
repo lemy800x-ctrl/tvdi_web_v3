@@ -150,7 +150,7 @@ function niceScaleKm(maxKm) {
 }
 /* Tên bản đồ chuyên đề: hiện trạng/dự báo + chỉ số + tháng/năm */
 function themeTitle(metricKey, p) {
-  const what = { tvdi: "hạn hán (TVDI)", lst: "nhiệt độ bề mặt (LST)", ndvi: "chỉ số thực vật (NDVI)" }[metricKey];
+  const what = { tvdi: "hạn hán (TVDI)", lst: "nhiệt độ bề mặt (LST)", ndvi: "chỉ số thực vật (NDVI)", uhi: "đảo nhiệt đô thị (chênh LST so với vùng nền)" }[metricKey];
   const kind = p.loai === "du_bao" ? "dự báo" : "hiện trạng";
   return `Bản đồ ${kind} ${what} TP.HCM sau sáp nhập (trừ đặc khu Côn Đảo) tháng ${p.thang} năm ${p.nam}`;
 }
@@ -1047,6 +1047,7 @@ async function loadAll(reload = false) {
   if (!data.months.length) throw new Error("CSDL chưa có dữ liệu. Quản trị viên cần nạp dữ liệu.");
   if (!data.est) data.est = data.wards.map(() => data.months.map(() => 0));
   state.geo = geo; state.data = data; state.error = null;
+  if (typeof prepareDerived === "function") prepareDerived(data);
   buildStrip();
   renderForecastSummary();
   let start = reload ? Math.min(state.idx, data.months.length - 1) : -1;
@@ -1204,6 +1205,6 @@ function showFatal(msg) {
 async function init() {
   bindUI(); drawLegend(); initMap(); setupChat(); setupTreeCalc();
   if (state.token) setAdmin(true);
-  try { await loadAll(); } catch (e) { showFatal(e.message); }
+  try { await loadAll(); if (typeof onDataReady === "function") onDataReady(); } catch (e) { showFatal(e.message); }
 }
 if (typeof document !== "undefined" && document.getElementById("map")) init();
