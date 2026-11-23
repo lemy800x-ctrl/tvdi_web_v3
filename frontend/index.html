@@ -24,7 +24,6 @@
       <button data-metric="tvdi" class="on" title="Chỉ số khô hạn TVDI">TVDI</button>
       <button data-metric="lst" title="Nhiệt độ bề mặt">LST</button>
       <button data-metric="ndvi" title="Chỉ số thực vật">NDVI</button>
-      <button data-metric="uhi" title="Đảo nhiệt đô thị: chênh nhiệt so với vùng nền">ĐNĐT</button>
     </div>
     <div class="seg" id="seg-view" role="group" aria-label="Kiểu bản đồ">
       <button data-view="2d" class="on">2D</button>
@@ -110,7 +109,6 @@
         <div id="class-bar" class="class-bar" aria-hidden="true"></div>
         <ul id="class-list" class="class-list"></ul>
         <p id="est-note" class="est-note" hidden></p>
-        <p id="uhi-note" class="est-note" hidden>Đảo nhiệt đô thị (ĐNĐT) = LST của phường/xã trừ LST trung bình của 25% phường/xã có NDVI cao nhất trong tháng (vùng nền ít xây dựng nhất). Đây là chỉ báo tương đối, không phải đo riêng vùng ngoại thành.</p>
       </section>
       <section class="block" id="fc-block" hidden>
         <h3>Dự báo toàn thành phố các tháng tới</h3>
@@ -240,7 +238,7 @@
     <button id="th-close" class="ghost" type="button">Đóng</button></span></div>
   <div class="theme-opts">
     <label class="field">Chỉ số
-      <select id="th-metric"><option value="tvdi">TVDI (khô hạn)</option><option value="lst">LST (nhiệt độ bề mặt)</option><option value="ndvi">NDVI (thực vật)</option><option value="uhi">ĐNĐT (đảo nhiệt đô thị)</option></select>
+      <select id="th-metric"><option value="tvdi">TVDI (khô hạn)</option><option value="lst">LST (nhiệt độ bề mặt)</option><option value="ndvi">NDVI (thực vật)</option></select>
     </label>
     <label class="field">Tháng / năm <select id="th-period"></select></label>
     <label class="field grow">Tên bản đồ <input id="th-title" type="text" placeholder="Để trống: tự đặt tên theo chỉ số, hiện trạng/dự báo và tháng"></label>
@@ -306,7 +304,7 @@
   <div class="theme-head"><b>So sánh hai thời điểm</b><button id="cmp-close" class="ghost" type="button">Đóng</button></div>
   <div class="theme-opts">
     <label class="field">Chỉ số
-      <select id="cmp-metric"><option value="tvdi">TVDI (khô hạn)</option><option value="lst">LST (nhiệt độ bề mặt)</option><option value="ndvi">NDVI (thực vật)</option><option value="uhi">ĐNĐT (đảo nhiệt)</option></select>
+      <select id="cmp-metric"><option value="tvdi">TVDI (khô hạn)</option><option value="lst">LST (nhiệt độ bề mặt)</option><option value="ndvi">NDVI (thực vật)</option></select>
     </label>
     <label class="field">Bên trái (trước) <select id="cmp-a"></select></label>
     <label class="field">Bên phải (sau) <select id="cmp-b"></select></label>
@@ -317,6 +315,7 @@
     <div id="cmp-line" class="cmp-line"></div>
   </div>
   <input id="cmp-slider" class="cmp-slider" type="range" min="0" max="100" value="50" aria-label="Kéo để so sánh">
+  <div id="cmp-legend" class="cmp-legend"></div>
   <div id="cmp-summary" class="est-note"></div>
 </dialog>
 

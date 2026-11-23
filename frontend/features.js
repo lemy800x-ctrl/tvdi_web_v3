@@ -4,16 +4,13 @@
    1. Liên kết chia sẻ + thẻ thông tin phường/xã (tải PNG)
    2. Bản tin tự động hàng tháng
    3. Máy tính cây xanh gắn với bản đồ + phường ưu tiên trồng cây
-   4. Đảo nhiệt đô thị, so sánh trước/sau, độ tin cậy số liệu
+   4. So sánh trước/sau, độ tin cậy số liệu
    ===================================================================== */
 
 /* ===== FEATURES-PURE-START ===== */
 const REL_FULL = ["Cao - đo từ ảnh vệ tinh", "Trung bình - nội suy từ các tháng lân cận", "Thấp - dùng trung bình nhiều năm", "Dự báo - kết quả mô hình"];
 const REL_SHORT = ["Ảnh thật", "Nội suy", "TB nhiều năm", "Dự báo"];
 const REL_COLORS = ["#2e9b5f", "#e6c229", "#e68a2e", "#7a4fb0"];
-METRICS.uhi = { key: "uhi", label: "ĐNĐT", unit: " °C", min: 0, max: 10, dec: 1, rank: "desc",
-  legend: "Chênh nhiệt so với vùng nền (°C)",
-  palette: ["#2b83ba", "#7fbfa8", "#d9ef8b", "#fee08b", "#fdae61", "#f46d43", "#d73027", "#a50026"] };
 const NDVI_TREE = 0.75;   // NDVI giả định của điểm ảnh phủ kín tán cây
 
 const isNum = (v) => v !== null && v !== undefined && !Number.isNaN(v);
@@ -53,21 +50,6 @@ function relLevel(d, i, m) {
   return e > 0 ? Math.min(e, 2) : 0;
 }
 function monthIndex(d, nam, thang) { return d.months.findIndex((x) => x.nam === nam && x.thang === thang); }
-
-/* Đảo nhiệt đô thị: LST phường trừ LST trung bình của 25% phường có NDVI cao nhất cùng tháng (vùng nền) */
-function computeUhi(d) {
-  const W = d.wards.length, M = d.months.length;
-  const uhi = d.wards.map(() => new Array(M).fill(null));
-  for (let m = 0; m < M; m++) {
-    const rows = [];
-    for (let i = 0; i < W; i++) { const l = d.lst[i][m], n = d.ndvi[i][m]; if (isNum(l) && isNum(n)) rows.push({ i, l, n }); }
-    if (rows.length < 8) continue;
-    const thr = quantileOf(rows.map((r) => r.n).sort((a, b) => a - b), 0.75);
-    const base = meanOf(rows.filter((r) => r.n >= thr).map((r) => r.l));
-    rows.forEach((r) => { uhi[r.i][m] = r.l - base; });
-  }
-  return uhi;
-}
 
 /* Hệ số LST theo NDVI giữa các phường: trung vị của hệ số hồi quy từng tháng hiện trạng gần nhất (chỉ ô đo từ ảnh) */
 function lstNdviSlope(d, lastN = 36) {
@@ -200,7 +182,7 @@ function bulletinData(d, m) {
   }
   return {
     p, m, W, city, counts, topTvdi: topN(tv, 5, "desc"), topLst: topN(d.lst.map((r) => r[m]), 5, "desc"),
-    topUhi: d.uhi ? topN(d.uhi.map((r) => r[m]), 5, "desc") : [], rise, fall,
+    rise, fall,
     anom: { n: anom.filter((x) => isNum(x) && x >= 0.05).length, top: topN(anom, 5, "desc").filter((x) => x.v > 0) },
     nEst: d.est.reduce((a, row) => a + (row[m] > 0 ? 1 : 0), 0), next, forecast: p.loai === "du_bao",
   };
@@ -233,7 +215,6 @@ function bulletinSections(d, b) {
   const hi = [];
   if (b.topTvdi.length) hi.push(`TVDI cao nhất: ${list(b.topTvdi, "tvdi")}.`);
   if (b.topLst.length) hi.push(`LST cao nhất: ${list(b.topLst, "lst")}.`);
-  if (b.topUhi.length) hi.push(`Chênh nhiệt lớn nhất so với vùng nền: ${list(b.topUhi, "uhi")}.`);
   if (hi.length) secs.push({ title: "Phường/xã nổi bật", lines: hi });
 
   const ch = [];
@@ -265,22 +246,28 @@ function compareStats(d, key, a, b) {
   return { mA, mB, d: isNum(mA) && isNum(mB) ? mB - mA : null, up: topN(diff, 5, "desc").filter((x) => x.v > 0), down: topN(diff, 5, "asc").filter((x) => x.v < 0) };
 }
 
-/* Liên kết chia sẻ */
-function buildHash(s) {
+/* Liên kết chia sẻ dạng ?m=tvdi&t=2026-01&w=phuong-thu-duc
+   (query string bền hơn #hash khi gửi qua Zalo/Messenger; tên phường dạng ASCII ngắn gọn) */
+const wardSlug = (name) => norm(name).replace(/\s+/g, "-");
+function buildLink(s) {
   const p = ["m=" + s.metric, "t=" + s.nam + "-" + String(s.thang).padStart(2, "0")];
   if (s.view && s.view !== "2d") p.push("v=" + s.view);
-  if (s.ward) p.push("w=" + encodeURIComponent(s.ward));
-  return "#" + p.join("&");
+  if (s.ward) p.push("w=" + encodeURIComponent(wardSlug(s.ward)));
+  return "?" + p.join("&");
 }
-function parseHash(h) {
+function parseLink(str) {
   const o = {};
-  String(h || "").replace(/^#/, "").split("&").forEach((kv) => {
+  String(str || "").replace(/^[?#]/, "").split("&").forEach((kv) => {
     const k = kv.indexOf("=");
     if (k < 1) return;
     try { o[kv.slice(0, k)] = decodeURIComponent(kv.slice(k + 1)); } catch (_) { /* bỏ qua tham số hỏng */ }
   });
   const t = /^(\d{4})-(\d{1,2})$/.exec(o.t || "");
   return { metric: o.m, nam: t ? Number(t[1]) : null, thang: t ? Number(t[2]) : null, view: o.v, ward: o.w };
+}
+function findWardByParam(wards, w) {
+  if (!w) return -1;
+  return wards.findIndex((n) => wardSlug(n) === w || n === w || norm(n) === norm(w));
 }
 /* ===== FEATURES-PURE-END ===== */
 
@@ -290,7 +277,7 @@ function parseHash(h) {
 
 
 let relMode = false;       // đang tô bản đồ theo độ tin cậy
-let applyingHash = false;  // đang áp dụng liên kết, không ghi ngược lại
+let applyingLink = false;  // đang áp dụng liên kết, không ghi ngược lại
 
 async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; }
@@ -310,7 +297,6 @@ const lastActualIdx = (d) => { for (let m = d.months.length - 1; m >= 0; m--) if
 
 /* ---------- Chuẩn bị dữ liệu dẫn xuất (gọi từ loadAll) ---------- */
 function prepareDerived(d) {
-  d.uhi = computeUhi(d);
   d._reg = lstNdviSlope(d);
   state._areas = null;
   const sel = $("tc-ward");
@@ -321,34 +307,49 @@ function prepareDerived(d) {
 }
 
 /* ---------- 1. Liên kết chia sẻ ---------- */
-function syncHash() {
-  if (applyingHash || !state.data) return;
+function syncLink() {
+  if (applyingLink || !state.data) return;
   const p = curPeriod();
-  const h = buildHash({ metric: state.metric, nam: p.nam, thang: p.thang, view: state.view, ward: state.ward !== null ? state.data.wards[state.ward] : null });
-  try { if (decodeURIComponent(location.hash) !== decodeURIComponent(h)) history.replaceState(null, "", h); } catch (_) { /* bỏ qua */ }
+  const q = buildLink({ metric: state.metric, nam: p.nam, thang: p.thang, view: state.view, ward: state.ward !== null ? state.data.wards[state.ward] : null });
+  try { history.replaceState(null, "", q); } catch (_) { /* bỏ qua */ }
 }
-function applyHash(tries = 0) {
-  if (!state.data || !location.hash || location.hash.length < 2) return;
-  const o = parseHash(location.hash);
-  applyingHash = true;
+function readLink() {
+  const o = parseLink(location.search);
+  return o.metric || o.nam || o.ward || o.view ? o : parseLink(location.hash);   // vẫn đọc được liên kết dạng #... cũ
+}
+/* Gọi từ loadAll: mở đúng tháng ngay lần vẽ đầu tiên, không phụ thuộc thứ tự tải */
+function initialPeriodIdx(d) {
+  const o = readLink();
+  return o.nam && o.thang ? monthIndex(d, o.nam, o.thang) : -1;
+}
+function applyLink(tries = 0) {
+  if (!state.data) return;
+  const o = readLink();
+  if (!o.metric && !o.nam && !o.ward && !o.view) return;
+  applyingLink = true;
   try {
     if (o.metric && METRICS[o.metric]) setMetric(o.metric);
     if (o.view === "3d" || o.view === "2d") setView(o.view);
     if (o.nam && o.thang) { const j = monthIndex(state.data, o.nam, o.thang); if (j >= 0) { stopAnim(); goTo(j); } }
     if (o.ward) {
-      const i = state.data.wards.findIndex((w) => w === o.ward || norm(w) === norm(o.ward));
+      const i = findWardByParam(state.data.wards, o.ward);
       if (i >= 0) {
         selectWard(i, true);
-        if (!state.layersReady && tries < 12) setTimeout(() => { applyHash(tries + 1); }, 600);   // bản đồ chưa sẵn sàng: thử lại để zoom
+        if (!state.layersReady && tries < 12) setTimeout(() => { applyLink(tries + 1); }, 600);   // bản đồ chưa sẵn sàng: thử lại để zoom
       }
     }
-  } finally { applyingHash = false; }
-  syncHash();
+  } finally { applyingLink = false; }
+  syncLink();
+  if (tries === 0) {
+    const p = curPeriod();
+    notify(`Đang xem theo liên kết chia sẻ: ${periodText(p)} (${p.loai === "du_bao" ? "dự báo" : "hiện trạng"}), ${METRICS[state.metric].label}.`, 4500);
+  }
 }
 async function shareLink() {
-  syncHash();
+  syncLink();
   const ok = await copyText(location.href);
-  notify(ok ? "Đã sao chép liên kết. Ai mở liên kết sẽ thấy đúng tháng, chỉ số và phường/xã bạn đang xem." : "Không sao chép được tự động. Hãy sao chép địa chỉ trên thanh trình duyệt.", 4000);
+  const p = curPeriod(), w = state.ward !== null ? ", " + state.data.wards[state.ward] : "";
+  notify(ok ? `Đã sao chép liên kết: ${periodText(p)}, ${METRICS[state.metric].label}${w}.` : "Không sao chép được tự động. Hãy sao chép địa chỉ trên thanh trình duyệt.", 4500);
 }
 
 /* ---------- Thẻ thông tin phường/xã ---------- */
@@ -499,18 +500,43 @@ function renderPriority() {
 }
 
 /* ---------- 4a. So sánh trước/sau ---------- */
-function drawMsg(canvas, text) {
-  canvas.width = 1754; canvas.height = 1240;
-  const g = canvas.getContext("2d");
-  g.fillStyle = "#fff"; g.fillRect(0, 0, 1754, 1240);
-  g.fillStyle = "#5d7468"; g.textAlign = "center"; g.font = "500 30px 'Be Vietnam Pro', sans-serif"; g.fillText(text, 877, 620);
+/* Vẽ bản đồ gọn (chỉ ranh giới + màu), cùng khung cho cả hai bên để thanh kéo khớp nhau */
+function cmpFrame() {
+  const bb = bboxOfFeatures(state.geo.features), kx = Math.cos((((bb[1] + bb[3]) / 2) * Math.PI) / 180);
+  const W = 1000, pad = 20, s = (W - 2 * pad) / ((bb[2] - bb[0]) * kx);
+  return { bb, kx, s, pad, W, H: Math.round(2 * pad + (bb[3] - bb[1]) * s) };
+}
+function drawCompareMap(canvas, fr, idx, col, key, rightSide) {
+  const d = state.data, p = d.months[idx], g = canvas.getContext("2d");
+  canvas.width = fr.W; canvas.height = fr.H;
+  g.fillStyle = "#e9f0ec"; g.fillRect(0, 0, fr.W, fr.H);
+  const label = `${periodText(p)} (${p.loai === "du_bao" ? "dự báo" : "hiện trạng"})`;
+  if (col.every((v) => !isNum(v))) {
+    g.fillStyle = "#5d7468"; g.textAlign = "center"; g.font = "500 26px 'Be Vietnam Pro', sans-serif";
+    g.fillText(`${periodText(p)} chưa có dữ liệu ${METRICS[key].label}.`, fr.W / 2, fr.H / 2 - 16);
+    g.fillText("Các tháng dự báo chỉ có TVDI.", fr.W / 2, fr.H / 2 + 22);
+  } else {
+    const X = (lon) => fr.pad + (lon - fr.bb[0]) * fr.kx * fr.s, Y = (lat) => fr.pad + (fr.bb[3] - lat) * fr.s;
+    state.geo.features.forEach((f, i) => {
+      const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
+      g.beginPath();
+      polys.forEach((rings) => rings.forEach((ring) => { ring.forEach(([lon, lat], k) => (k ? g.lineTo(X(lon), Y(lat)) : g.moveTo(X(lon), Y(lat)))); g.closePath(); }));
+      g.globalAlpha = d.est[i][idx] > 0 ? 0.55 : 1;
+      g.fillStyle = colorFor(key, col[i]); g.fill("evenodd");
+      g.globalAlpha = 1; g.strokeStyle = "rgba(255,255,255,.75)"; g.lineWidth = 0.8; g.stroke();
+    });
+  }
+  g.font = "600 30px 'Be Vietnam Pro', sans-serif";
+  const w = g.measureText(label).width + 28, x = rightSide ? fr.W - 14 - w : 14;
+  g.fillStyle = "rgba(255,255,255,.92)"; g.fillRect(x, 14, w, 46);
+  g.fillStyle = p.loai === "du_bao" ? "#7a4fb0" : "#0e6b8c"; g.textAlign = "left"; g.fillText(label, x + 14, 47);
 }
 function openCompare() {
   if (!state.data) { notify("Dữ liệu chưa tải xong."); return; }
   stopAnim();
   const d = state.data, sa = $("cmp-a"), sb = $("cmp-b");
   [sa, sb].forEach((s) => { s.replaceChildren(); d.months.forEach((p, i) => s.append(el("option", { value: String(i), text: `${p.thang}/${p.nam}${p.loai === "du_bao" ? " (dự báo)" : ""}` }))); });
-  $("cmp-metric").value = state.metric;
+  const cm = $("cmp-metric"); cm.value = ["tvdi", "lst", "ndvi"].includes(state.metric) ? state.metric : "tvdi";
   sb.value = String(state.idx);
   const py = monthIndex(d, curPeriod().nam - 1, curPeriod().thang);
   sa.value = String(py >= 0 ? py : 0);
@@ -518,18 +544,21 @@ function openCompare() {
   renderCompare();
 }
 function renderCompare() {
-  const d = state.data, key = $("cmp-metric").value, a = Number($("cmp-a").value), b = Number($("cmp-b").value);
-  const ca = column(key, a), cb = column(key, b), all = ca.concat(cb);
-  const draw = (canvas, idx, col) => {
-    const p = d.months[idx];
-    if (col.every((v) => !isNum(v))) { drawMsg(canvas, `${periodText(p)} chưa có dữ liệu ${METRICS[key].label}. Các tháng dự báo chỉ có TVDI.`); return; }
-    drawThematic(canvas, { geo: state.geo, values: col, est: d.est.map((r) => r[idx]), metricKey: key, classes: makeClasses(key, all),
-      title: themeTitle(key, p), subtitle: p.loai === "du_bao" ? "DỰ BÁO bằng mô hình học máy" : "HIỆN TRẠNG tính từ ảnh vệ tinh Landsat 8/9",
-      modelNote: "", grid: false, north: false, scale: false, labels: false });
-  };
-  draw($("cmp-cv-a"), a, ca); draw($("cmp-cv-b"), b, cb);
+  const d = state.data, key = $("cmp-metric").value, a = Number($("cmp-a").value), b = Number($("cmp-b").value), M = METRICS[key];
+  const fr = cmpFrame();
+  document.querySelector(".cmp-stage").style.setProperty("--ar", String(fr.W / fr.H));
+  drawCompareMap($("cmp-cv-a"), fr, a, column(key, a), key, false);
+  drawCompareMap($("cmp-cv-b"), fr, b, column(key, b), key, true);
   setCompareSlider();
-  const s = compareStats(d, key, a, b), M = METRICS[key], sg = (v) => { const r = Number(v.toFixed(M.dec + 1)); return (r > 0 ? "+" : r < 0 ? "-" : "") + fmt(Math.abs(r), M.dec + 1) + M.unit; };
+  // chú giải
+  const lg = $("cmp-legend"); lg.replaceChildren();
+  const bar = el("div", { class: "legend-bar" });
+  bar.style.background = `linear-gradient(to right, ${M.palette.map((c, i) => `${c} ${(i / (M.palette.length - 1)) * 100}%`).join(", ")})`;
+  const ticks = el("div", { class: "legend-ticks" }), range = M.max - M.min;
+  for (let i = 0; i <= 5; i++) ticks.append(el("span", { text: fmt(M.min + (range * i) / 5, range >= 5 ? 0 : 1) }));
+  lg.append(el("div", { class: "legend-title", text: M.legend }), bar, ticks, el("div", { class: "muted small", text: "Màu nhạt hơn: số ước lượng do thiếu ảnh vệ tinh." }));
+  // tóm tắt
+  const s = compareStats(d, key, a, b), sg = (v) => { const r = Number(v.toFixed(M.dec + 1)); return (r > 0 ? "+" : r < 0 ? "-" : "") + fmt(Math.abs(r), M.dec + 1) + M.unit; };
   const box = $("cmp-summary"); box.replaceChildren();
   box.append(el("p", { text: `${M.label} trung bình: ${periodText(d.months[a])} = ${fmtMetric(key, s.mA)}; ${periodText(d.months[b])} = ${fmtMetric(key, s.mB)}${s.d !== null ? " (chênh " + sg(s.d) + ")" : ""}.` }));
   const lines = (arr) => arr.map((x) => `${d.wards[x.i]} (${sg(x.v)})`).join("; ") || "không có";
@@ -548,17 +577,16 @@ function paintReliability() {
   if (!d || !state.layersReady) return;
   d.wards.forEach((w, i) => map.setFeatureState({ source: "wards", id: i }, { color: REL_COLORS[relLevel(d, i, state.idx)] }));
 }
-function updateUhiNote() { $("uhi-note").hidden = state.metric !== "uhi"; }
 
 /* ---------- Móc vào các hàm của app.js ---------- */
 const _goTo = goTo;
-goTo = function (i) { _goTo(i); syncHash(); if (currentTab() === "bulletin") renderBulletin(); };
+goTo = function (i) { _goTo(i); syncLink(); if (currentTab() === "bulletin") renderBulletin(); };
 const _setMetric = setMetric;
-setMetric = function (key) { _setMetric(key); updateUhiNote(); syncHash(); };
+setMetric = function (key) { _setMetric(key); syncLink(); };
 const _setView = setView;
-setView = function (v) { _setView(v); syncHash(); };
+setView = function (v) { _setView(v); syncLink(); };
 const _selectWard = selectWard;
-selectWard = function (i, zoom) { _selectWard(i, zoom); syncHash(); };
+selectWard = function (i, zoom) { _selectWard(i, zoom); syncLink(); };
 const _showTab = showTab;
 showTab = function (name) { _showTab(name); if (currentTab() === "bulletin") renderBulletin(); };
 const _applyToMap = applyToMap;
@@ -584,7 +612,7 @@ popupContent = function (i) {
 
 /* ---------- Khởi động ---------- */
 function onDataReady() {
-  try { updateUhiNote(); applyHash(); } catch (e) { console.error("features:", e); }
+  try { applyLink(); } catch (e) { console.error("features:", e); }
 }
 function setupFeatures() {
   $("btn-share").addEventListener("click", shareLink);
@@ -613,6 +641,6 @@ function setupFeatures() {
     $("tc-ward").value = state.ward === null ? "" : String(state.ward);
     renderPriority(); renderTreeLink();
   });
-  window.addEventListener("hashchange", () => applyHash());
+  window.addEventListener("hashchange", () => { if (location.hash.length > 1) applyLink(1); });
 }
 setupFeatures();

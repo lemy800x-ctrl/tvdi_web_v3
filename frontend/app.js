@@ -150,7 +150,7 @@ function niceScaleKm(maxKm) {
 }
 /* Tên bản đồ chuyên đề: hiện trạng/dự báo + chỉ số + tháng/năm */
 function themeTitle(metricKey, p) {
-  const what = { tvdi: "hạn hán (TVDI)", lst: "nhiệt độ bề mặt (LST)", ndvi: "chỉ số thực vật (NDVI)", uhi: "đảo nhiệt đô thị (chênh LST so với vùng nền)" }[metricKey];
+  const what = { tvdi: "hạn hán (TVDI)", lst: "nhiệt độ bề mặt (LST)", ndvi: "chỉ số thực vật (NDVI)" }[metricKey];
   const kind = p.loai === "du_bao" ? "dự báo" : "hiện trạng";
   return `Bản đồ ${kind} ${what} TP.HCM sau sáp nhập (trừ đặc khu Côn Đảo) tháng ${p.thang} năm ${p.nam}`;
 }
@@ -1050,7 +1050,7 @@ async function loadAll(reload = false) {
   if (typeof prepareDerived === "function") prepareDerived(data);
   buildStrip();
   renderForecastSummary();
-  let start = reload ? Math.min(state.idx, data.months.length - 1) : -1;
+  let start = reload ? Math.min(state.idx, data.months.length - 1) : (typeof initialPeriodIdx === "function" ? initialPeriodIdx(data) : -1);
   if (start < 0) { start = data.months.length - 1; for (let i = start; i >= 0; i--) if (data.months[i].loai === "thuc_te") { start = i; break; } }
   ensureLayers();
   goTo(start);
